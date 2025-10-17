@@ -1,116 +1,161 @@
-import sys
-import os
-import numpy as np
-import time
-import math
-
-# --- CRITICAL FIX: Add 'src' directory to Python path ---
-# This guarantees Python can find all custom modules from the 'src' folder.
-current_dir = os.path.dirname(os.path.abspath(__file__))
-# Assumes 'src' is parallel to 'sim'
-src_path = os.path.join(os.path.dirname(current_dir), 'src')
-if src_path not in sys.path:
-    sys.path.append(src_path)
-# --------------------------------------------------------
-
-# The rest of the imports now rely on the corrected sys.path:
-from atmospheric_model import AtmosphericModel
-from glider_dynamics import GliderDynamics
 from mpc_controller import MPCController
+from data_logger import DataLogger
+import numpy as np
+import math
+import sys
 
+class GliderDynamics:
+    """Simplified Glider Point Mass Dynamics."""
+    def __init__(self, params):
+        self.m = params.get('mass', 700.0)
+        self.g = 9.81
+        self.rho = 1.225
+        self.S = params.get('S', 14.0)
+        self.CD0 = params.get('CD0', 0.015)
+        self.K = params.get('K', 0.04)
 
-# --- SIMULATION CONFIGURATION ---
-TIME_STEP = 1.0       # MPC control step (seconds)
-SIMULATION_DURATION = 250.0 # Total time to run 
-THERMAL_CENTER = np.array([500.0, 500.0]) # Location of the thermal (m)
-THERMAL_RADIUS = 100.0 # Thermal radius (m)
+        # Thermal properties (used here for simulation truth, not MPC knowledge)
+        self.thermal_cx = 50.0
+        self.thermal_cy = 50.0
+        self.thermal_radius = 200.0
+        self.W_z_max = 5.0
+        self.CL = 0.8 # Constant CL for simulation
 
-# MPC Configuration
-MPC_N = 20 # Prediction horizon steps
-MPC_DT = TIME_STEP 
-
-# Glider specific parameters
-GLIDER_PARAMS = {
-    'mass': 700.0, # kg
-    'S': 14.0,     # Wing Area (m^2)
-    'CD0': 0.015,
-    'K': 0.04
-}
-
-# Initial State Vector X = [x, y, z, vx, vy, vz, m]
-# Starts at 500m high, heading toward the thermal center.
-INITIAL_STATE = np.array([20.0, 0.0, 500.0, 20.0, 0.0, -1.0, GLIDER_PARAMS['mass']])
-
-
-def main_simulation():
-    # Adding a clear print statement to confirm the script starts running its logic
-    print("--- 🚀 SCRIPT INITIATED SUCCESSFULLY ---") 
-    print("--- Bio-Inspired Autonomous Glider Control System Simulation ---")
-    print("Setting up simulation components...")
-
-    # 1. Initialize Atmospheric Model (CONFIRMED 2-ARGUMENT CALL)
-    atm_model = AtmosphericModel(THERMAL_CENTER, THERMAL_RADIUS)
-
-    # 2. Initialize Glider Dynamics Model
-    glider_dynamics = GliderDynamics(GLIDER_PARAMS)
-
-    # 3. Initialize MPC Controller
-    mpc_controller = MPCController(N=MPC_N, DT=MPC_DT, glider_params=GLIDER_PARAMS) 
-
-    # --- Setup Complete ---
-    current_state = INITIAL_STATE
-    t = 0.0
-    
-    print(f"Thermal at: X={THERMAL_CENTER[0]:.0f}, Y={THERMAL_CENTER[1]:.0f}, Radius: {THERMAL_RADIUS:.0f}m")
-    print("Setup complete. Starting simulation loop.")
-    
-    # Simulation loop
-    while t < SIMULATION_DURATION:
-        # 1. Sense the Environment
-        thermal_params = np.array([THERMAL_CENTER[0], THERMAL_CENTER[1], THERMAL_RADIUS])
+    def get_thermal_uplift(self, x, y):
+        """Calculates vertical wind speed based on location."""
+        dist = np.sqrt((x - self.thermal_cx)**2 + (y - self.thermal_cy)**2)
         
-        # 2. Compute Control Input
-        try:
-            phi_rad, gamma_rad = mpc_controller.compute_control(current_state, thermal_params)
-        except Exception as e:
-            # Added more robust logging for silent CasADi failures
-            print(f"FATAL MPC SOLVER ERROR at t={t}s: {e}. Using zero control and exiting.")
-            phi_rad, gamma_rad = 0.0, 0.0
-            # If the solver fails repeatedly, we should terminate
-            break
+        # Use a smooth cosine model (same as in MPC)
+        if dist < self.thermal_radius:
+            dist_ratio = dist / self.thermal_radius
+            # Smooth function: goes from W_z_max at center to 0 at radius
+            W_z = self.W_z_max * (np.cos(np.pi * dist_ratio) + 1.0) / 2.0
+        else:
+            W_z = 0.0
+        return W_z, dist
 
+    def step(self, state, control, dt):
+        """
+        Integrates the 7-state dynamics (Euler integration).
+        state = [x, y, z, vx, vy, vz, m]
+        control = [phi, gamma]
+        """
+        x, y, z, vx, vy, vz, m = state
+        phi, gamma = control
 
-        # 3. Apply Controls and step the dynamics
-        wind_vec_3d = atm_model.get_wind_vector(current_state[0], current_state[1], current_state[2])
+        # --- 1. Environmental Winds ---
+        W_atm_z, dist_to_thermal = self.get_thermal_uplift(x, y)
+        W_atm_vec = np.array([0.0, 0.0, W_atm_z])
+        V_ground_vec = np.array([vx, vy, vz])
+
+        # --- 2. Airspeed Vector ---
+        V_air_vec = V_ground_vec - W_atm_vec
+        V_air = np.linalg.norm(V_air_vec)
         
-        current_state = glider_dynamics.step_dynamics(
-            current_state, 
-            phi_rad, 
-            gamma_rad, 
-            wind_vec_3d, 
-            TIME_STEP
-        )
+        # Guard against zero airspeed (using a minimum operational check)
+        if V_air < 1e-3:
+            V_air = 1e-3 # Prevent division by zero, though MPC should prevent this
         
-        t += TIME_STEP
+        e_v = V_air_vec / V_air # Unit vector of V_air (direction of relative wind)
 
-        # 4. Logging and Reporting 
-        if int(t) % 10 == 0 or t == TIME_STEP:
-            pos_m = current_state[:3]
-            V_air_mag = glider_dynamics.calculate_airspeed(current_state, wind_vec_3d)
+        # --- 3. Aerodynamic Forces ---
+        CD = self.CD0 + self.K * self.CL**2
+        
+        L_mag = 0.5 * self.rho * self.S * self.CL * V_air**2
+        D_mag = 0.5 * self.rho * self.S * CD * V_air**2
+        
+        # Drag Force opposes the relative wind direction
+        D_vec = -D_mag * e_v
+        
+        # Lift Force (Simplified projection using bank/pitch control, same as in MPC)
+        # Note: This projection is highly simplified to align with the MPC's CasADi model
+        L_x = L_mag * (np.sin(phi) * np.sin(gamma)) 
+        L_y = L_mag * (-np.cos(phi) * np.sin(gamma)) 
+        L_z = L_mag * (np.cos(gamma)) 
+        L_vec = np.array([L_x, L_y, L_z])
+
+        # --- 4. Total Force & Acceleration ---
+        G_vec = np.array([0.0, 0.0, -m * self.g])
+        F_total = L_vec + D_vec + G_vec
+        a_vec = F_total / m
+
+        # --- 5. Integration (Euler Step) ---
+        x_dot = np.concatenate([V_ground_vec, a_vec, [0.0]]) # Mass derivative is 0
+        next_state = state + dt * x_dot
+        
+        # Apply ground constraint 
+        if next_state[2] < 0.0:
+            next_state[2] = 0.0
+            next_state[5] = 0.0
             
-            print(
-                f"t={t:.1f}s | "
-                f"Pos: ({pos_m[0]:.0f}, {pos_m[1]:.0f}, {pos_m[2]:.0f})m | "
-                f"Airspeed: {V_air_mag:.1f}m/s | "
-                f"Control (Phi, Gamma): ({np.rad2deg(phi_rad):.1f}°, {np.rad2deg(gamma_rad):.1f}°)"
-            )
+        return next_state, W_atm_z, dist_to_thermal
 
-        # Emergency stop if altitude is dangerously low
-        if current_state[2] < 0:
-            print(f"\nSimulation terminated early at t={t:.1f}s: Glider crashed (Altitude {current_state[2]:.0f}m).")
+def run_simulation():
+    """Main simulation loop: Initializes components and drives the simulation forward."""
+    
+    # ------------------ Initialization ------------------
+    N = 20          # MPC Horizon steps
+    DT = 1.0        # MPC/Simulation Time Step (seconds)
+    SIM_TIME = 120  # Total simulation time
+    TOTAL_STEPS = int(SIM_TIME / DT)
+
+    glider_params = {
+        'mass': 700.0, 
+        'S': 14.0,
+        'CD0': 0.015,
+        'K': 0.04
+    }
+
+    # Initial State: [x, y, z, vx, vy, vz, m]
+    # Starting slightly outside the thermal core, heading towards it.
+    initial_state = np.array([0.0, 0.0, 150.0, 15.0, 0.0, -1.0, 700.0]) 
+
+    # Thermal Parameters: [cx, cy, radius]
+    thermal_params = np.array([50.0, 50.0, 200.0]) 
+    
+    # Instantiate Components
+    glider_dynamics = GliderDynamics(glider_params)
+    mpc = MPCController(N=N, DT=DT, glider_params=glider_params)
+    logger = DataLogger()
+
+    # Initial control guess 
+    current_control = np.array([0.0, 0.0])
+    
+    # ------------------ Simulation Loop ------------------
+    print(f"Starting Glider Simulation for {SIM_TIME} seconds...")
+    sys.stdout.flush()
+    current_state = initial_state
+    
+    for k in range(TOTAL_STEPS):
+        t = k * DT
+        
+        # --- 1. Compute Control ---
+        # Get the control action for the current state
+        control_action = mpc.compute_control(current_state, thermal_params)
+        current_control = control_action 
+        
+        # --- 2. Step Dynamics ---
+        # Apply the control to the true dynamics
+        next_state, W_atm_z, dist_to_thermal = glider_dynamics.step(current_state, current_control, DT)
+        current_state = next_state
+        
+        # --- 3. Log Data ---
+        logger.log_step(t + DT, current_state, current_control, W_atm_z, dist_to_thermal)
+        
+        # Termination Condition
+        if current_state[2] < 5.0 and k > 0:
+            print(f"Altitude too low. Terminating simulation at t={t+DT:.1f}s.")
+            sys.stdout.flush()
             break
+            
+        # Feedback print every 10 steps
+        if k % 10 == 0:
+            print(f"T={t+DT:.1f}s, Alt={current_state[2]:.2f}m, V_air (Approx)={np.linalg.norm(current_state[3:6]):.2f}m/s, Wz={W_atm_z:.2f}m/s")
+            sys.stdout.flush() 
+    
+    # ------------------ Results ------------------
+    logger.print_summary()
 
-    print("\nSimulation complete.")
 
-if __name__ == "__main__":
-    main_simulation()
+if __name__ == '__main__':
+    run_simulation()
