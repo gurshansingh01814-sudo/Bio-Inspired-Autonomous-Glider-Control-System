@@ -13,7 +13,7 @@ class MPCController:
         self.DT = DT     # Time step (seconds)
         self.T = N * DT  # Total prediction time
         self.MAX_ITER = 200 
-        self.EPSILON_AIRSPEED = 1e-4
+        self.EPSILON_AIRSPEED = 1e-6 # Increased precision for stabilization
         
         # Glider Parameters (must be consistent with GliderDynamics)
         self.m = glider_params.get('mass', 700.0)
@@ -57,7 +57,6 @@ class MPCController:
         # --- 1. Dynamic Model (EOM) in CasADi ---
 
         # Atmospheric Wind Model (Simplified for Optimization)
-        # W_atm = [0, 0, W_z_thermal]
         dist_sq = (self.x[0] - thermal_cx)**2 + (self.x[1] - thermal_cy)**2
         dist = ca.sqrt(dist_sq)
 
@@ -74,18 +73,24 @@ class MPCController:
         V_air_vec = V_ground_vec - W_atm_vec
         V_air_sq = ca.dot(V_air_vec, V_air_vec)
         
-        # CRITICAL STABILITY FIX
-        V_air_mag = ca.sqrt(ca.fmax(V_air_sq, self.EPSILON_AIRSPEED))
-        
+        # ----------------------------------------------------------------------
+        # CRITICAL STABILITY FIX: Additive Regularization for Smooth Derivatives
+        # V_reg_sq is the stabilized Airspeed Magnitude Squared
+        V_reg_sq = V_air_sq + self.EPSILON_AIRSPEED 
+        V_reg = ca.sqrt(V_reg_sq)
+        # ----------------------------------------------------------------------
+
         # Aerodynamic Forces (Lift and Drag, simplified model)
         CL = 0.8 # Placeholder CL
         CD = self.CD0 + self.K * CL**2
         
-        L = 0.5 * self.rho * self.S * CL * V_air_mag**2
-        D = 0.5 * self.rho * self.S * CD * V_air_mag**2
+        # Use V_reg_sq for Force magnitude (since V^2 is used in the force calculation)
+        L = 0.5 * self.rho * self.S * CL * V_reg_sq
+        D = 0.5 * self.rho * self.S * CD * V_reg_sq
         
         # Force Vectors
-        e_v = V_air_vec / V_air_mag # Unit vector of V_air
+        # Unit vector (e_v) uses the robust V_reg denominator (never zero)
+        e_v = V_air_vec / V_reg 
         D_vec = -D * e_v
         
         # Simplified Lift projection 
@@ -200,7 +205,7 @@ class MPCController:
                 'print_level': 3,  
                 'acceptable_tol': 1e-4,
                 'acceptable_obj_change_tol': 1e-4,
-                'linear_solver': 'mumps'  # <--- FIXED: Using MUMPS, an open-source bundled solver
+                'linear_solver': 'mumps'  # Using MUMPS
             },
             'print_time': False,
         }
@@ -250,4 +255,3 @@ class MPCController:
         
         # Return the first control action (phi, gamma)
         return self.u_opt[:, 0]
-
