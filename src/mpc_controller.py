@@ -13,8 +13,8 @@ class MPCController:
         self.DT = DT    # Time step (seconds)
         self.T = N * DT  # Total prediction time
         self.MAX_ITER = 200  
-        # FIX 1: INCREASE REGULARIZATION SLIGHTLY TO ENSURE NUMERICAL STABILITY 
-        self.EPSILON_AIRSPEED = 1e-4 # m/s^2 (Must be small, but not too small)
+        # FIX 1: INCREASE REGULARIZATION SLIGHTLY FOR MAXIMUM STABILITY 
+        self.EPSILON_AIRSPEED = 1e-3 # Increased to 1e-3 for robustness
         
         # Define Hard Minimum Operational Speed 
         self.V_MIN_OP = 10.0 # m/s (Glider stall speed constraint)
@@ -34,7 +34,7 @@ class MPCController:
         self.MIN_PITCH = np.deg2rad(-10)
 
         # State Constraints (Soft/Penalty applied)
-        self.MIN_Z = 10.0 # Reducing min altitude for now to allow more movement
+        self.MIN_Z = 10.0 
 
         self._setup_casadi_solver()
         
@@ -60,14 +60,21 @@ class MPCController:
 
         # --- 1. Dynamic Model (EOM) in CasADi ---
 
-        # Atmospheric Wind Model (Simplified for Optimization)
+        # Atmospheric Wind Model 
         dist_sq = (self.x[0] - thermal_cx)**2 + (self.x[1] - thermal_cy)**2
         dist = ca.sqrt(dist_sq)
 
         W_z_max = 5.0 # Max uplift 
-        W_z = ca.if_else(dist < thermal_radius, 
-                                W_z_max * (ca.cos(np.pi * dist / thermal_radius) + 1.0) / 2.0, 
-                                0.0)
+
+        # FIX 2: Smoother Thermal Model (Replacing non-smooth if_else)
+        # We use fmin(dist, radius) to limit the effective distance used in the
+        # cosine function to a maximum of the thermal_radius. 
+        # This keeps the function continuously differentiable at the boundary.
+        dist_limited = ca.fmin(dist, thermal_radius)
+        dist_ratio = dist_limited / thermal_radius
+        
+        # W_z goes from W_z_max (at dist=0) to 0 (at dist=R)
+        W_z = W_z_max * (ca.cos(np.pi * dist_ratio) + 1.0) / 2.0
         W_atm_z = W_z
         
         # Airspeed and Aerodynamics
@@ -89,18 +96,13 @@ class MPCController:
         L_mag = 0.5 * self.rho * self.S * CL * V_air_sq
         D_mag = 0.5 * self.rho * self.S * CD * V_air_sq
         
-        # **FIX 2: Stabilized Force Direction (e_v)**
-        # Use the regularized denominator for the direction vector e_v
+        # Stabilized Force Direction (e_v) - Division by V_reg
         e_v = V_air_vec / V_reg
         
         # Drag Force: D_vec = -D_mag * e_v
         D_vec = -D_mag * e_v
         
         # Simplified Lift projection 
-        # L_vec is assumed to be perpendicular to the direction of flight (e_v)
-        # This is a highly simplified projection, as L is perpendicular to V_air_vec.
-        # For a full 6DOF model, L_vec must be computed from: L_vec = L_mag * (e_roll x e_pitch)
-        # For now, let's keep the existing simplified model and assume the issue is V_reg in the denominator.
         L_x = L_mag * (ca.sin(phi) * ca.sin(gamma)) 
         L_y = L_mag * (-ca.cos(phi) * ca.sin(gamma)) 
         L_z = L_mag * (ca.cos(gamma)) 
@@ -163,16 +165,20 @@ class MPCController:
             # Dynamics constraint: G_k = Xk_next_sym - Xk_next = 0
             G += [Xk_next_sym - Xk_next] 
             
-            # FIX 3: Robust Non-Linear Path Constraint on Airspeed
+            # Robust Non-Linear Path Constraint on Airspeed
             V_k_next_ground_vec = ca.vertcat(Xk_next_sym[3], Xk_next_sym[4], Xk_next_sym[5])
             
-            # Approximate W_atm_z for the constraint using the current thermal parameters
+            # Re-calculating thermal at Xk_next_sym for V_air constraint
             thermal_cx, thermal_cy, thermal_radius = ca.vertsplit(self.p)
             dist_sq_k = (Xk_next_sym[0] - thermal_cx)**2 + (Xk_next_sym[1] - thermal_cy)**2
             dist_k = ca.sqrt(dist_sq_k)
-            W_z_k = ca.if_else(dist_k < thermal_radius, 
-                                W_z_max * (ca.cos(np.pi * dist_k / thermal_radius) + 1.0) / 2.0, 
-                                0.0)
+            
+            # Using the same robust thermal model for the constraint calculation
+            dist_limited_k = ca.fmin(dist_k, thermal_radius)
+            dist_ratio_k = dist_limited_k / thermal_radius
+            W_z_max = 5.0
+            W_z_k = W_z_max * (ca.cos(np.pi * dist_ratio_k) + 1.0) / 2.0
+
             W_atm_vec_k = ca.vertcat(0.0, 0.0, W_z_k)
             
             V_air_vec_k = V_k_next_ground_vec - W_atm_vec_k
@@ -181,7 +187,7 @@ class MPCController:
             # Apply EPSILON regularization to the constraint calculation
             V_air_k_reg = ca.sqrt(V_air_sq_k + self.EPSILON_AIRSPEED)
             
-            # Constraint: V_air_k_reg >= self.V_MIN_OP (V_air_k_reg - V_MIN_OP >= 0)
+            # Constraint: V_air_k_reg - V_MIN_OP >= 0
             V_min_constraint = V_air_k_reg - self.V_MIN_OP 
             G += [V_min_constraint]
             # ------------------------------------------------------------------
@@ -206,8 +212,6 @@ class MPCController:
             self.ubx[u_idx_start: u_idx_end] = control_max
             
             # --- Bounds for State X_k+1 ---
-            # FIX 4: Lowering MIN_Z to allow solver a wider feasible set, 
-            # and letting cost function handle desired altitude.
             state_lb = [-1e6, -1e6, self.MIN_Z, -1e6, -1e6, -1e6, self.m]
             state_ub = [1e6, 1e6, 1e6, 1e6, 1e6, 1e6, self.m]
             
@@ -234,7 +238,7 @@ class MPCController:
             self.ubg[g_v_idx] = ca.inf   # Upper bound is infinite
             
             
-        # Final terminal cost
+        # Final terminal cost (Encourage low vertical speed and near thermal center)
         J += Q_pos * ((Xk[0] - thermal_cx)**2 + (Xk[1] - thermal_cy)**2)
         J += Q_vz_term * (Xk[5]**2)
 
