@@ -1,0 +1,18 @@
+# requirements.txt
+# Dependencies for Bio-Inspired Autonomous Glider Control System
+
+# Core scientific computing libraries
+numpy
+
+# Optimization framework (required by MPCController)
+casadi
+
+# Utility: Data logging and visualization might require this later
+# If you used it in data_logger.py, uncomment it:
+# pandas
+
+# If you plan to plot results later, add a plotting library:
+# matplotlib
+
+# Other potential libraries for future features:
+# scipy
