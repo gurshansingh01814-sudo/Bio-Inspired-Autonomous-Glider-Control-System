@@ -1,9 +1,15 @@
+import sys
+import os
+# --- CRITICAL FIX: Append Project Root to System Path ---
+# This ensures that 'mpc_controller.py' in the parent directory can be found.
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
+# --------------------------------------------------------
+
 from mpc_controller import MPCController
 import numpy as np
 import math
-import sys
-import os
 
+# NOTE: The DataLogger class is included here to prevent further import errors
 class DataLogger:
     """A simple class to log simulation data and print a summary."""
     def __init__(self):
@@ -162,10 +168,10 @@ def run_simulation():
     # Instantiate Components
     glider_dynamics = GliderDynamics(glider_params)
     try:
-        # Assuming MPCController is accessible via python -m execution
+        # MPCController is now reliably found due to the sys.path fix
         mpc = MPCController(N=N, DT=DT, glider_params=glider_params)
     except NameError:
-        print("ERROR: MPCController class not found. Ensure mpc_controller.py is in the parent directory.")
+        print("ERROR: MPCController class not found. Check mpc_controller.py file and class definition.")
         sys.exit(1)
         
     logger = DataLogger()
