@@ -1,20 +1,55 @@
+from mpc_controller import MPCController
+import numpy as np
+import math
 import sys
 import os
 
-# --- CRITICAL FIX START ---
-# Get the path of the project root directory (one level up from sim/)
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
+class DataLogger:
+    """A simple class to log simulation data and print a summary."""
+    def __init__(self):
+        self.log = {
+            'time': [],
+            'x': [], 'y': [], 'z': [], 'vx': [], 'vy': [], 'vz': [],
+            'phi': [], 'gamma': [],
+            'Wz': [], 'dist_to_thermal': []
+        }
 
-# Add the project root directory to the Python search path so it can find 'mpc_controller'
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir) 
-# --- CRITICAL FIX END ---
+    def log_step(self, t, state, control, W_atm_z, dist_to_thermal):
+        """Records the state and control at the given time step."""
+        self.log['time'].append(t)
+        self.log['x'].append(state[0])
+        self.log['y'].append(state[1])
+        self.log['z'].append(state[2])
+        self.log['vx'].append(state[3])
+        self.log['vy'].append(state[4])
+        self.log['vz'].append(state[5])
+        self.log['phi'].append(control[0])
+        self.log['gamma'].append(control[1])
+        self.log['Wz'].append(W_atm_z)
+        self.log['dist_to_thermal'].append(dist_to_thermal)
 
-from mpc_controller import MPCController
-from data_logger import DataLogger
-import numpy as np
-import math
+    def print_summary(self):
+        """Prints a summary of the simulation results."""
+        if not self.log['time']:
+            print("\n--- Simulation Summary ---\nNo data logged.")
+            return
+
+        final_time = self.log['time'][-1]
+        final_alt = self.log['z'][-1]
+        
+        # Calculate average thermal usage
+        avg_Wz = np.mean(self.log['Wz'])
+        
+        print("\n" + "="*40)
+        print("    GLIDER SIMULATION COMPLETE")
+        print("="*40)
+        print(f"Total Flight Time: {final_time:.1f} seconds")
+        print(f"Final Altitude (z): {final_alt:.2f} meters")
+        print(f"Final Position (x, y): ({self.log['x'][-1]:.1f}, {self.log['y'][-1]:.1f}) meters")
+        print(f"Average Uplift Used: {avg_Wz:.2f} m/s")
+        print(f"Number of Steps: {len(self.log['time'])}")
+        print("="*40 + "\n")
+
 
 class GliderDynamics:
     """Simplified Glider Point Mass Dynamics."""
@@ -126,7 +161,13 @@ def run_simulation():
     
     # Instantiate Components
     glider_dynamics = GliderDynamics(glider_params)
-    mpc = MPCController(N=N, DT=DT, glider_params=glider_params)
+    try:
+        # Assuming MPCController is accessible via python -m execution
+        mpc = MPCController(N=N, DT=DT, glider_params=glider_params)
+    except NameError:
+        print("ERROR: MPCController class not found. Ensure mpc_controller.py is in the parent directory.")
+        sys.exit(1)
+        
     logger = DataLogger()
 
     # Initial control guess 
