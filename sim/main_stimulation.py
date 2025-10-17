@@ -1,8 +1,20 @@
+import sys
+import os
+
+# --- CRITICAL FIX START ---
+# Get the path of the project root directory (one level up from sim/)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+
+# Add the project root directory to the Python search path so it can find 'mpc_controller'
+if parent_dir not in sys.path:
+    sys.path.append(parent_dir) 
+# --- CRITICAL FIX END ---
+
 from mpc_controller import MPCController
 from data_logger import DataLogger
 import numpy as np
 import math
-import sys
 
 class GliderDynamics:
     """Simplified Glider Point Mass Dynamics."""
@@ -107,7 +119,6 @@ def run_simulation():
     }
 
     # Initial State: [x, y, z, vx, vy, vz, m]
-    # Starting slightly outside the thermal core, heading towards it.
     initial_state = np.array([0.0, 0.0, 150.0, 15.0, 0.0, -1.0, 700.0]) 
 
     # Thermal Parameters: [cx, cy, radius]
@@ -130,12 +141,10 @@ def run_simulation():
         t = k * DT
         
         # --- 1. Compute Control ---
-        # Get the control action for the current state
         control_action = mpc.compute_control(current_state, thermal_params)
         current_control = control_action 
         
         # --- 2. Step Dynamics ---
-        # Apply the control to the true dynamics
         next_state, W_atm_z, dist_to_thermal = glider_dynamics.step(current_state, current_control, DT)
         current_state = next_state
         
