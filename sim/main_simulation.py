@@ -5,7 +5,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir)))
 # --------------------------------------------------------
 
-from mpc_controller import MPCController
+from src.mpc_controller import MPCController
 import numpy as np
 import math
 
