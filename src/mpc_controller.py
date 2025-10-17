@@ -9,11 +9,16 @@ class MPCController:
     def __init__(self, N=20, DT=1.0, glider_params=None):
         
         # Configuration
-        self.N = N       # Prediction horizon (steps)
-        self.DT = DT     # Time step (seconds)
-        self.T = N * DT  # Total prediction time
+        self.N = N       # Prediction horizon (steps)
+        self.DT = DT     # Time step (seconds)
+        self.T = N * DT  # Total prediction time
         self.MAX_ITER = 200 
         self.EPSILON_AIRSPEED = 1e-6 # Increased precision for stabilization
+        
+        # --- FIX 1: Define Hard Minimum Operational Speed ---
+        # Setting a minimum airspeed is CRITICAL for stability. The glider cannot fly at 0.
+        self.V_MIN_OP = 10.0 # m/s (Adjust based on glider properties, but must be > 0)
+        # ----------------------------------------------------
         
         # Glider Parameters (must be consistent with GliderDynamics)
         self.m = glider_params.get('mass', 700.0)
@@ -24,7 +29,7 @@ class MPCController:
         self.K = glider_params.get('K', 0.04)
 
         # Control Constraints
-        self.MAX_BANK = np.deg2rad(45)   
+        self.MAX_BANK = np.deg2rad(45)   
         self.MIN_BANK = np.deg2rad(-45)
         self.MAX_PITCH = np.deg2rad(10)
         self.MIN_PITCH = np.deg2rad(-10)
@@ -75,7 +80,7 @@ class MPCController:
         
         # ----------------------------------------------------------------------
         # CRITICAL STABILITY FIX: Additive Regularization for Smooth Derivatives
-        # V_reg_sq is the stabilized Airspeed Magnitude Squared
+        # This protection is already implemented and is excellent.
         V_reg_sq = V_air_sq + self.EPSILON_AIRSPEED 
         V_reg = ca.sqrt(V_reg_sq)
         # ----------------------------------------------------------------------
@@ -119,25 +124,29 @@ class MPCController:
         # --- 2. Cost Function Setup (Objective) ---
         J = 0 
         # --- TUNED WEIGHTS: Balance Altitude and Position ---
-        Q_pos = 1e2  
-        Q_alt = 1e3  
+        Q_pos = 1e2  
+        Q_alt = 1e3  
         R_cont = 1e-3 
         Q_vz_term = 1e3 
         # ---------------------------------------------
 
         opt_vars = []
         
+        # Recalculating lbg/ubg size: 7 * self.N (Dynamics) + 1 * self.N (V_air constraint)
+        self.lbg = np.zeros(((7 + 1) * self.N, 1)) 
+        self.ubg = np.zeros(((7 + 1) * self.N, 1))
+        
+        # Initial guess size calculation for lbx/ubx remains the same:
         self.lbx = np.zeros((7 * (self.N + 1) + 2 * self.N, 1))
         self.ubx = np.zeros((7 * (self.N + 1) + 2 * self.N, 1))
-        self.lbg = np.zeros((7 * self.N, 1)) 
-        self.ubg = np.zeros((7 * self.N, 1))
+
 
         # Initial state 
         X0 = ca.MX.sym('X0', 7)
         opt_vars += [X0]
         
         Xk = X0
-        G = [] 
+        G = [] # Constraint list
 
         # Loop over the prediction horizon
         for k in range(self.N):
@@ -151,6 +160,28 @@ class MPCController:
             
             # Dynamics constraint: G_k = Xk_next_sym - Xk_next = 0
             G += [Xk_next_sym - Xk_next] 
+            
+            # --- FIX 2: Non-Linear Path Constraint on Airspeed (CRITICAL) ---
+            # Recompute V_air_sq from the symbolic state Xk_next_sym for the constraint
+            V_k_next_ground_vec = ca.vertcat(Xk_next_sym[3], Xk_next_sym[4], Xk_next_sym[5])
+            
+            # Approximate W_atm_z for the constraint using the current thermal parameters
+            thermal_cx, thermal_cy, thermal_radius = ca.vertsplit(self.p)
+            dist_sq_k = (Xk_next_sym[0] - thermal_cx)**2 + (Xk_next_sym[1] - thermal_cy)**2
+            dist_k = ca.sqrt(dist_sq_k)
+            W_z_k = ca.if_else(dist_k < thermal_radius, 
+                                W_z_max * (ca.cos(np.pi * dist_k / thermal_radius) + 1.0) / 2.0, 
+                                0.0)
+            W_atm_vec_k = ca.vertcat(0.0, 0.0, W_z_k)
+            
+            V_air_vec_k = V_k_next_ground_vec - W_atm_vec_k
+            V_air_k = ca.sqrt(ca.dot(V_air_vec_k, V_air_vec_k))
+            
+            # Constraint: V_air_k >= self.V_MIN_OP
+            # This constraint must be enforced in the constraint vector G
+            V_min_constraint = V_air_k - self.V_MIN_OP # g >= 0
+            G += [V_min_constraint]
+            # ------------------------------------------------------------------
 
             # Running Cost L(x, u)
             pos_cost = Q_pos * ((Xk_next_sym[0] - thermal_cx)**2 + (Xk_next_sym[1] - thermal_cy)**2)
@@ -161,9 +192,7 @@ class MPCController:
 
             Xk = Xk_next_sym
             
-            # --- Constraints and Bounds ---
-            
-            # Bounds for Control U_k
+            # --- Bounds for Control U_k ---
             u_idx_start = 7 * (self.N + 1) + 2 * k
             u_idx_end = 7 * (self.N + 1) + 2 * (k + 1)
             
@@ -173,7 +202,10 @@ class MPCController:
             self.lbx[u_idx_start: u_idx_end] = control_min
             self.ubx[u_idx_start: u_idx_end] = control_max
             
-            # Bounds for State X_k+1
+            # --- Bounds for State X_k+1 ---
+            # NOTE: We can now allow individual velocity components to be negative 
+            # (e.g., vx < 0 when turning), as long as the magnitude V_air is large enough 
+            # (enforced by the non-linear constraint added above).
             state_lb = [-1e6, -1e6, self.MIN_Z, -1e6, -1e6, -1e6, self.m]
             state_ub = [1e6, 1e6, 1e6, 1e6, 1e6, 1e6, self.m]
             
@@ -182,7 +214,25 @@ class MPCController:
 
             self.lbx[7 * (k + 1): 7 * (k + 2)] = state_lb_col
             self.ubx[7 * (k + 1): 7 * (k + 2)] = state_ub_col
-
+            
+            # --- Bounds for Constraints G (Updated to reflect new V_air constraint) ---
+            
+            # Index of the dynamics equality constraints (7 per step)
+            g_dyn_idx_start = 8 * k
+            g_dyn_idx_end = 8 * k + 7
+            
+            # Dynamics constraints are Xk_next_sym - Xk_next = 0 (Equality)
+            self.lbg[g_dyn_idx_start: g_dyn_idx_end] = 0.0
+            self.ubg[g_dyn_idx_start: g_dyn_idx_end] = 0.0
+            
+            # Index of the V_air path constraint (1 per step)
+            g_v_idx = 8 * k + 7
+            
+            # V_min constraint is V_air - V_MIN_OP >= 0 (Inequality)
+            self.lbg[g_v_idx] = 0.0      # Lower bound is 0 (V_air >= V_MIN_OP)
+            self.ubg[g_v_idx] = ca.inf   # Upper bound is infinite
+            
+            
         # Final terminal cost
         J += Q_pos * ((Xk[0] - thermal_cx)**2 + (Xk[1] - thermal_cy)**2)
         J += Q_vz_term * (Xk[5]**2)
@@ -193,19 +243,21 @@ class MPCController:
         # --- 3. Solver Setup ---
 
         nlp = {
-            'f': J,             
+            'f': J,             
             'x': self.opt_vars, 
-            'g': self.G,        
-            'p': self.p         
+            'g': self.G,        
+            'p': self.p         
         }
         
         opts = {
             'ipopt': {
                 'max_iter': self.MAX_ITER,
-                'print_level': 3,  
+                'print_level': 3,  
                 'acceptable_tol': 1e-4,
                 'acceptable_obj_change_tol': 1e-4,
-                'linear_solver': 'mumps'  # Using MUMPS
+                'linear_solver': 'mumps',  # Using MUMPS
+                # IMPORTANT: Set a tighter bound on constraint violation to handle the V_air inequality.
+                'tol': 1e-4 
             },
             'print_time': False,
         }
@@ -223,33 +275,39 @@ class MPCController:
 
         # Initial guess (Warm-start)
         if self.u_opt.shape == (2, self.N):
+            # Shift the optimal control sequence forward
             u_init = np.hstack([self.u_opt[:, 1:], self.u_opt[:, -1:]]) 
         else:
             u_init = np.zeros((2, self.N))
             u_init[0, :] = np.deg2rad(10.0) 
         
         if self.x_opt.shape == (7, self.N + 1):
+            # Shift the optimal state trajectory forward
             x_init = np.hstack([self.x_opt[:, 1:], self.x_opt[:, -1:]])
         else:
+            # Re-initialize if the size is wrong
             x_init = np.zeros((7, self.N + 1))
         
+        # Combine state and control guesses
         x0_guess = np.concatenate([x_init.flatten(), u_init.flatten()]).reshape(-1, 1)
         
         if x0_guess.shape[0] != self.opt_vars.shape[0]:
-               x0_guess = np.zeros((self.opt_vars.shape[0], 1))
+            # Fallback if guess size is incorrect
+            x0_guess = np.zeros((self.opt_vars.shape[0], 1))
         
         # Run the solver
         sol = self.solver(
-            x0=x0_guess,     
-            lbx=self.lbx,    
-            ubx=self.ubx,    
-            lbg=self.lbg,    
-            ubg=self.ubg,    
+            x0=x0_guess,     
+            lbx=self.lbx,    
+            ubx=self.ubx,    
+            lbg=self.lbg,    
+            ubg=self.ubg,    
             p=thermal_params 
         )
 
         opt_sol = sol['x'].full().flatten()
         
+        # Store results for warm-start in the next step
         self.x_opt = opt_sol[:7 * (self.N + 1)].reshape((7, self.N + 1))
         self.u_opt = opt_sol[7 * (self.N + 1):].reshape((2, self.N))
         
