@@ -12,8 +12,8 @@ class MPCController:
         self.N = N       # Prediction horizon (steps)
         self.DT = DT     # Time step (seconds)
         self.T = N * DT  # Total prediction time
-        self.MAX_ITER = 200 # Increased from 100 for better convergence
-        self.EPSILON_AIRSPEED = 1e-4 # Small number to ensure V_air > 0 for stability
+        self.MAX_ITER = 200 
+        self.EPSILON_AIRSPEED = 1e-4
         
         # Glider Parameters (must be consistent with GliderDynamics)
         self.m = glider_params.get('mass', 700.0)
@@ -24,19 +24,19 @@ class MPCController:
         self.K = glider_params.get('K', 0.04)
 
         # Control Constraints
-        self.MAX_BANK = np.deg2rad(45)   # Max bank angle (phi)
+        self.MAX_BANK = np.deg2rad(45)   
         self.MIN_BANK = np.deg2rad(-45)
-        self.MAX_PITCH = np.deg2rad(10) # Max pitch angle (gamma)
+        self.MAX_PITCH = np.deg2rad(10)
         self.MIN_PITCH = np.deg2rad(-10)
 
         # State Constraints (Soft/Penalty applied)
-        self.MIN_Z = 100.0 # Safety altitude
+        self.MIN_Z = 100.0
 
         self._setup_casadi_solver()
         
         # Initial guess/solution (to warm-start the solver)
         self.u_opt = np.zeros((2, N))
-        self.u_opt[0, :] = np.deg2rad(10.0) # Start with a 10-degree bank
+        self.u_opt[0, :] = np.deg2rad(10.0)
         
         self.x_opt = np.zeros((7, N + 1))
 
@@ -197,10 +197,10 @@ class MPCController:
         opts = {
             'ipopt': {
                 'max_iter': self.MAX_ITER,
-                'print_level': 3,  # <--- CRITICAL DEBUGGING CHANGE
+                'print_level': 3,  
                 'acceptable_tol': 1e-4,
                 'acceptable_obj_change_tol': 1e-4,
-                'linear_solver': 'ma27'
+                'linear_solver': 'ma57'  # <--- FIXED: Using MA57 instead of MA27 (due to missing HSL library)
             },
             'print_time': False,
         }
@@ -250,3 +250,4 @@ class MPCController:
         
         # Return the first control action (phi, gamma)
         return self.u_opt[:, 0]
+
