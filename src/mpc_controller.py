@@ -13,7 +13,7 @@ class MPCController:
         self.DT = DT    # Time step (seconds)
         self.T = N * DT  # Total prediction time
         self.MAX_ITER = 200 
-        self.EPSILON_AIRSPEED = 1e-6 # Increased precision for stabilization
+        self.EPSILON_AIRSPEED = 1e-6 # Added regularization constant for V_air stability
         
         # FIX 1: Define Hard Minimum Operational Speed 
         self.V_MIN_OP = 10.0 # m/s (Glider stall speed constraint)
@@ -169,10 +169,13 @@ class MPCController:
             W_atm_vec_k = ca.vertcat(0.0, 0.0, W_z_k)
             
             V_air_vec_k = V_k_next_ground_vec - W_atm_vec_k
-            V_air_k = ca.sqrt(ca.dot(V_air_vec_k, V_air_vec_k))
+            V_air_sq_k = ca.dot(V_air_vec_k, V_air_vec_k)
             
-            # Constraint: V_air_k >= self.V_MIN_OP (V_air - V_MIN_OP >= 0)
-            V_min_constraint = V_air_k - self.V_MIN_OP 
+            # FIX 3: Apply EPSILON regularization to the constraint calculation
+            V_air_k_reg = ca.sqrt(V_air_sq_k + self.EPSILON_AIRSPEED)
+            
+            # Constraint: V_air_k_reg >= self.V_MIN_OP (V_air_k_reg - V_MIN_OP >= 0)
+            V_min_constraint = V_air_k_reg - self.V_MIN_OP 
             G += [V_min_constraint]
             # ------------------------------------------------------------------
 
@@ -217,7 +220,7 @@ class MPCController:
             # V_air path inequality constraint (1 per step)
             g_v_idx = 8 * k + 7
             
-            # V_air - V_MIN_OP >= 0 
+            # V_air_k_reg - V_MIN_OP >= 0 
             self.lbg[g_v_idx] = 0.0      # Lower bound is 0 
             self.ubg[g_v_idx] = ca.inf   # Upper bound is infinite
             
