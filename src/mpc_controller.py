@@ -197,7 +197,7 @@ class MPCController:
         opts = {
             'ipopt': {
                 'max_iter': self.MAX_ITER,
-                'print_level': 0, 
+                'print_level': 3,  # <--- CRITICAL DEBUGGING CHANGE
                 'acceptable_tol': 1e-4,
                 'acceptable_obj_change_tol': 1e-4,
                 'linear_solver': 'ma27'
