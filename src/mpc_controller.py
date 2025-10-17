@@ -114,17 +114,17 @@ class MPCController:
         # --- 2. Cost Function Setup (Objective) ---
         J = 0 
         # --- TUNED WEIGHTS: Balance Altitude and Position ---
-        Q_pos = 1e2  # MODERATE: Drive toward thermal center
-        Q_alt = 1e3  # HIGH: Maximize altitude (the primary objective)
-        R_cont = 1e-3 # LOW: Allow small control movements
-        Q_vz_term = 1e3 # Terminal penalty on vertical velocity
+        Q_pos = 1e2  
+        Q_alt = 1e3  
+        R_cont = 1e-3 
+        Q_vz_term = 1e3 
         # ---------------------------------------------
 
         opt_vars = []
         
         self.lbx = np.zeros((7 * (self.N + 1) + 2 * self.N, 1))
         self.ubx = np.zeros((7 * (self.N + 1) + 2 * self.N, 1))
-        self.lbg = np.zeros((7 * self.N, 1)) # Equality constraints (dynamics)
+        self.lbg = np.zeros((7 * self.N, 1)) 
         self.ubg = np.zeros((7 * self.N, 1))
 
         # Initial state 
@@ -200,7 +200,7 @@ class MPCController:
                 'print_level': 3,  
                 'acceptable_tol': 1e-4,
                 'acceptable_obj_change_tol': 1e-4,
-                'linear_solver': 'ma57'  # <--- FIXED: Using MA57 instead of MA27 (due to missing HSL library)
+                'linear_solver': 'mumps'  # <--- FIXED: Using MUMPS, an open-source bundled solver
             },
             'print_time': False,
         }
