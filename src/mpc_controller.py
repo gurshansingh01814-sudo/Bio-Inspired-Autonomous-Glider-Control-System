@@ -12,10 +12,11 @@ class MPCController:
         self.N = N      # Prediction horizon (steps)
         self.DT = DT    # Time step (seconds)
         self.T = N * DT  # Total prediction time
-        self.MAX_ITER = 200 
-        self.EPSILON_AIRSPEED = 1e-6 # Added regularization constant for V_air stability
+        self.MAX_ITER = 200  
+        # FIX 1: INCREASE REGULARIZATION SLIGHTLY TO ENSURE NUMERICAL STABILITY 
+        self.EPSILON_AIRSPEED = 1e-4 # m/s^2 (Must be small, but not too small)
         
-        # FIX 1: Define Hard Minimum Operational Speed 
+        # Define Hard Minimum Operational Speed 
         self.V_MIN_OP = 10.0 # m/s (Glider stall speed constraint)
         
         # Glider Parameters (must be consistent with GliderDynamics)
@@ -33,7 +34,7 @@ class MPCController:
         self.MIN_PITCH = np.deg2rad(-10)
 
         # State Constraints (Soft/Penalty applied)
-        self.MIN_Z = 100.0
+        self.MIN_Z = 10.0 # Reducing min altitude for now to allow more movement
 
         self._setup_casadi_solver()
         
@@ -84,19 +85,25 @@ class MPCController:
         CL = 0.8 # Placeholder CL
         CD = self.CD0 + self.K * CL**2
         
-        # Use V_reg_sq for Force magnitude
-        L = 0.5 * self.rho * self.S * CL * V_reg_sq
-        D = 0.5 * self.rho * self.S * CD * V_reg_sq
+        # Force magnitudes: Use V_air_sq for magnitude to avoid unnecessary sqrt
+        L_mag = 0.5 * self.rho * self.S * CL * V_air_sq
+        D_mag = 0.5 * self.rho * self.S * CD * V_air_sq
         
-        # Force Vectors
-        # Unit vector (e_v) uses the robust V_reg denominator
-        e_v = V_air_vec / V_reg 
-        D_vec = -D * e_v
+        # **FIX 2: Stabilized Force Direction (e_v)**
+        # Use the regularized denominator for the direction vector e_v
+        e_v = V_air_vec / V_reg
+        
+        # Drag Force: D_vec = -D_mag * e_v
+        D_vec = -D_mag * e_v
         
         # Simplified Lift projection 
-        L_x = L * (ca.sin(phi) * ca.sin(gamma)) 
-        L_y = L * (-ca.cos(phi) * ca.sin(gamma)) 
-        L_z = L * (ca.cos(gamma)) 
+        # L_vec is assumed to be perpendicular to the direction of flight (e_v)
+        # This is a highly simplified projection, as L is perpendicular to V_air_vec.
+        # For a full 6DOF model, L_vec must be computed from: L_vec = L_mag * (e_roll x e_pitch)
+        # For now, let's keep the existing simplified model and assume the issue is V_reg in the denominator.
+        L_x = L_mag * (ca.sin(phi) * ca.sin(gamma)) 
+        L_y = L_mag * (-ca.cos(phi) * ca.sin(gamma)) 
+        L_z = L_mag * (ca.cos(gamma)) 
         L_vec = ca.vertcat(L_x, L_y, L_z)
         
         # Gravity
@@ -156,7 +163,7 @@ class MPCController:
             # Dynamics constraint: G_k = Xk_next_sym - Xk_next = 0
             G += [Xk_next_sym - Xk_next] 
             
-            # FIX 2: Non-Linear Path Constraint on Airspeed (CRITICAL) 
+            # FIX 3: Robust Non-Linear Path Constraint on Airspeed
             V_k_next_ground_vec = ca.vertcat(Xk_next_sym[3], Xk_next_sym[4], Xk_next_sym[5])
             
             # Approximate W_atm_z for the constraint using the current thermal parameters
@@ -171,7 +178,7 @@ class MPCController:
             V_air_vec_k = V_k_next_ground_vec - W_atm_vec_k
             V_air_sq_k = ca.dot(V_air_vec_k, V_air_vec_k)
             
-            # FIX 3: Apply EPSILON regularization to the constraint calculation
+            # Apply EPSILON regularization to the constraint calculation
             V_air_k_reg = ca.sqrt(V_air_sq_k + self.EPSILON_AIRSPEED)
             
             # Constraint: V_air_k_reg >= self.V_MIN_OP (V_air_k_reg - V_MIN_OP >= 0)
@@ -199,6 +206,8 @@ class MPCController:
             self.ubx[u_idx_start: u_idx_end] = control_max
             
             # --- Bounds for State X_k+1 ---
+            # FIX 4: Lowering MIN_Z to allow solver a wider feasible set, 
+            # and letting cost function handle desired altitude.
             state_lb = [-1e6, -1e6, self.MIN_Z, -1e6, -1e6, -1e6, self.m]
             state_ub = [1e6, 1e6, 1e6, 1e6, 1e6, 1e6, self.m]
             
@@ -247,7 +256,7 @@ class MPCController:
                 'print_level': 3,   
                 'acceptable_tol': 1e-4,
                 'acceptable_obj_change_tol': 1e-4,
-                'linear_solver': 'mumps',   # Using MUMPS
+                'linear_solver': 'mumps',   
                 'tol': 1e-4 
             },
             'print_time': False,
