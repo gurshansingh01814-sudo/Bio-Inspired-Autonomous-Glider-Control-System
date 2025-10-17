@@ -22,14 +22,14 @@ from mpc_controller import MPCController
 # --- SIMULATION CONFIGURATION ---
 TIME_STEP = 1.0       # MPC control step (seconds)
 SIMULATION_DURATION = 250.0 # Total time to run 
-THERMAL_CENTER = np.array([500.0, 500.0]) # Location of the thermal
-THERMAL_RADIUS = 100.0
+THERMAL_CENTER = np.array([500.0, 500.0]) # Location of the thermal (m)
+THERMAL_RADIUS = 100.0 # Thermal radius (m)
 
 # MPC Configuration
 MPC_N = 20 # Prediction horizon steps
 MPC_DT = TIME_STEP 
 
-# Glider specific parameters (consistent across all modules)
+# Glider specific parameters
 GLIDER_PARAMS = {
     'mass': 700.0, # kg
     'S': 14.0,     # Wing Area (m^2)
@@ -38,11 +38,13 @@ GLIDER_PARAMS = {
 }
 
 # Initial State Vector X = [x, y, z, vx, vy, vz, m]
-# Glider starts 500m high, heading toward the thermal center at (500, 500)
+# Starts at 500m high, heading toward the thermal center.
 INITIAL_STATE = np.array([20.0, 0.0, 500.0, 20.0, 0.0, -1.0, GLIDER_PARAMS['mass']])
 
 
 def main_simulation():
+    # Adding a clear print statement to confirm the script starts running its logic
+    print("--- 🚀 SCRIPT INITIATED SUCCESSFULLY ---") 
     print("--- Bio-Inspired Autonomous Glider Control System Simulation ---")
     print("Setting up simulation components...")
 
@@ -65,24 +67,22 @@ def main_simulation():
     # Simulation loop
     while t < SIMULATION_DURATION:
         # 1. Sense the Environment
-        # Parameters passed to the MPC solver: [thermal_cx, thermal_cy, thermal_radius]
         thermal_params = np.array([THERMAL_CENTER[0], THERMAL_CENTER[1], THERMAL_RADIUS])
         
         # 2. Compute Control Input
         try:
-            # MPC returns optimal bank (phi) and pitch (gamma) in radians
             phi_rad, gamma_rad = mpc_controller.compute_control(current_state, thermal_params)
         except Exception as e:
-            # Fallback control in case of solver failure
+            # Added more robust logging for silent CasADi failures
+            print(f"FATAL MPC SOLVER ERROR at t={t}s: {e}. Using zero control and exiting.")
             phi_rad, gamma_rad = 0.0, 0.0
-            # print(f"MPC solver failed at t={t}s: {e}. Using zero control.")
+            # If the solver fails repeatedly, we should terminate
+            break
 
 
         # 3. Apply Controls and step the dynamics
-        # Get wind vector from the environment model
         wind_vec_3d = atm_model.get_wind_vector(current_state[0], current_state[1], current_state[2])
         
-        # Step the dynamics model
         current_state = glider_dynamics.step_dynamics(
             current_state, 
             phi_rad, 
@@ -98,7 +98,6 @@ def main_simulation():
             pos_m = current_state[:3]
             V_air_mag = glider_dynamics.calculate_airspeed(current_state, wind_vec_3d)
             
-            # Print state and control (converting to degrees for readability)
             print(
                 f"t={t:.1f}s | "
                 f"Pos: ({pos_m[0]:.0f}, {pos_m[1]:.0f}, {pos_m[2]:.0f})m | "
@@ -112,3 +111,6 @@ def main_simulation():
             break
 
     print("\nSimulation complete.")
+
+if __name__ == "__main__":
+    main_simulation()
