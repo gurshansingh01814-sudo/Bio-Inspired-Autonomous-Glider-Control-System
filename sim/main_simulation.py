@@ -8,7 +8,7 @@ import math # Needed for math.degrees, math.radians etc.
 
 # Assume the necessary classes are now correctly imported from src/
 try:
-    from src.glider_model import GliderDynamics 
+    from src.glider_dynamics import GliderDynamics 
     from src.mpc_controller import MPCController
     from src.atmospheric_model import AtmosphericModel
 except ImportError as e:
