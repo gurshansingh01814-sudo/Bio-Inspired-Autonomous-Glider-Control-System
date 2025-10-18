@@ -173,6 +173,7 @@ class MPCController:
         V_MAX = 50.0 
         V_air_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
         V_mag = ca.sqrt(V_air_sq) # Airspeed magnitude
+        # print(V_mag)
         
         # 1. Minimum and Maximum Airspeed constraint
         opti.subject_to(V_air_sq >= V_MIN**2) # Enforce minimum velocity squared
