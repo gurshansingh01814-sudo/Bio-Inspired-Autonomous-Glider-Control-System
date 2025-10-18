@@ -39,6 +39,9 @@ class MPCController:
         # 4. Storage for initial guess (warm start)
         self.U_prev = np.zeros((2, self.N))
         self.X_prev = np.zeros((6, self.N + 1))
+        # Store the last successful control for emergency fallback
+        self.last_successful_u = np.array([0.0, 0.0])
+
 
     def _load_config(self, path):
         """Loads configuration from a YAML file."""
@@ -95,18 +98,8 @@ class MPCController:
         D_vec = -D_mag * e_v
         
         # Lift Vector (Simplified projection using controls)
-        # Note: This is a placeholder for a complex coordinate transformation 
-        # and assumes control inputs (phi, alpha) are approximately relative to V_air.
-        
-        # Lift is orthogonal to V_air. For this simplified case, we model it as:
-        # A horizontal component for turning (bank: phi)
-        # A vertical component for pitch/climb (pitch: alpha)
-        
-        # NOTE: A more correct model would use a rotation matrix or cross product.
-        # We use a simple, CasADi-friendly placeholder force for initial stability:
         L_x = ca.if_else(ca.fabs(V_reg) < 1e-3, 0.0, L_mag * ca.sin(phi) * e_v[1] / V_reg)
         L_y = ca.if_else(ca.fabs(V_reg) < 1e-3, 0.0, L_mag * -ca.sin(phi) * e_v[0] / V_reg)
-        
         L_z_pitch = L_mag * ca.cos(phi) * ca.cos(alpha) # Main lift component
         
         L_vec = ca.vertcat(L_x, L_y, L_z_pitch)
@@ -155,8 +148,7 @@ class MPCController:
         U = opti.variable(NU, self.N)       # Control trajectory
         X = opti.variable(NX, self.N + 1)   # State trajectory
         
-        # CRITICAL FIX 1: Add Slack Variable (S) for Altitude Constraint
-        # S is a positive variable to relax the minimum altitude constraint
+        # CRITICAL FIX 1: Add Slack Variable (S) for Altitude Constraint (to handle infeasibility)
         S = opti.variable(1, self.N + 1)
         opti.subject_to(S >= 0)
         
@@ -183,7 +175,6 @@ class MPCController:
 
         # State Bounds:
         # Altitude Constraint (Softened): z + S >= ALT_MIN
-        # If z drops below ALT_MIN, S must become positive to satisfy the constraint.
         for k in range(self.N + 1):
              opti.subject_to(X[2, k] + S[0, k] >= self.ALT_MIN) 
         
@@ -199,22 +190,23 @@ class MPCController:
             J += ca.mtimes([U[:, k].T, self.R_u, U[:, k]]) 
 
             # Primary Objective: Maximize altitude
-            # CRITICAL FIX 2: INCREASE ALTITUDE WEIGHT to -500
-            J += -500 * X[2, k+1] 
+            # CRITICAL FIX 2: Slightly reduce altitude weight to ease numerical stiffness
+            J += -400 * X[2, k+1] # Reduced from -500 to -400
             
             # Secondary Objective: Navigate towards the thermal (Minimize horizontal distance squared)
             dist_sq = (X[0, k+1] - Thermal_target[0])**2 + (X[1, k+1] - Thermal_target[1])**2
             J += 0.01 * dist_sq 
         
-        # Tertiary Objective: Penalize Slack Variable Use (Cost of violating the soft altitude constraint)
-        J += 1000 * ca.sumsqr(S) # High penalty for non-zero slack
+        # Tertiary Objective: Penalize Slack Variable Use (High penalty to discourage constraint violation)
+        J += 1000 * ca.sumsqr(S) 
 
         opti.minimize(J)
         
         # --- 6. Solver Options and Compilation ---
         opts = {
             'ipopt': {
-                'max_iter': 1000, 
+                # CRITICAL FIX 3: Increase max iterations to allow convergence
+                'max_iter': 3000, # Increased from 1000 to 3000
                 'print_level': 0, 
                 'acceptable_tol': 1e-6, 
                 'acceptable_obj_change_tol': 1e-6
@@ -248,6 +240,7 @@ class MPCController:
         if self.X_prev is not None:
             self.opti.set_initial(self.X, self.X_prev)
         else:
+             # Fallback guess: Propagate current state forward
              self.opti.set_initial(self.X, np.tile(current_state, (self.N + 1, 1)).T)
         
         # --- Solve NLP ---
@@ -256,20 +249,19 @@ class MPCController:
             u_star = sol.value(self.U)
             x_star = sol.value(self.X)
             
-            # Update warm start for next iteration
-            self.U_prev = np.hstack((u_star[:, 1:], u_star[:, -1:])) # Shift U, repeat last column
-            self.X_prev = np.hstack((x_star[:, 1:], x_star[:, -1:])) # Shift X, repeat last column
+            # Update warm start for next iteration (shift and repeat last)
+            self.U_prev = np.hstack((u_star[:, 1:], u_star[:, -1:])) 
+            self.X_prev = np.hstack((x_star[:, 1:], x_star[:, -1:])) 
+            
+            # Store successful control
+            self.last_successful_u = u_star[:, 0]
 
             return u_star[:, 0] # Return the first control input
             
         except Exception as e:
-            # If solver fails (e.g., local infeasibility, NaN)
-            print("\nWARNING: IPOPT failed to converge. Returning previous control input.")
+            # If solver fails (e.g., local infeasibility, max iter)
+            print("\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
             print(f"Error: {e}")
             
-            # Reset warm start to simple guess to prevent repeated NaN errors
-            self.U_prev = np.zeros((2, self.N))
-            self.X_prev = None
-            
-            # For this critical failure, we return a safe-glide command (e.g., 0 bank, 0 pitch)
-            return np.array([0.0, 0.0]) 
+            # Use the last successful control as a fallback, and keep the previous warm start
+            return self.last_successful_u
