@@ -14,14 +14,16 @@ GLIDER:
   max_bank_angle_deg: 45.0 # Max bank angle limit (degrees)
   max_pitch_angle_deg: 10.0 # Max pitch angle limit (degrees, for dive/climb)
 
+  # Initial state: [x, y, z, vx, vy, vz]
+  # Glider now starts at [490m, 500m] (10m west of center) at a high altitude (490m)
+  # to force immediate thermal interaction and a clear turning solution.
+  initial_state: [490.0, 500.0, 490.0, 15.0, 0.0, 0.0] 
+
 # --- SIMULATION PARAMETERS (Defines the numerical integration speed) ---
 SIMULATION:
   max_time: 120.0        # Maximum simulation time (s)
   time_step_s: 0.2       # Core numerical integration step (s)
   
-  # Initial state: [x, y, z, vx, vy, vz]
-  initial_state: [0.0, 0.0, 400.0, 20.0, 0.0, 0.0] 
-
 # --- ATMOSPHERIC MODEL PARAMETERS (Thermal centered at 500m, 500m) ---
 ATMOSPHERE:
   rho_air: 1.225         # Air density (kg/m^3) - Standard sea level
@@ -31,6 +33,7 @@ ATMOSPHERE:
     center_x: 500.0      # Thermal center X coordinate (m)
     center_y: 500.0      # Thermal center Y coordinate (m)
     radius: 150.0        # Thermal radius (m)
+    # --- CRITICAL FIX: Ensure strong lift (Wz = 3.0 m/s) is available for climbing ---
     max_vertical_speed: 3.0 # Maximum vertical air speed (m/s)
 
 # --- MPC CONTROLLER PARAMETERS (Defines the control loop speed and planning depth) ---
