@@ -8,6 +8,8 @@ class GliderDynamics:
     """
     Implements the NUMERICAL, continuous-time state-space model for the glider 
     used for simulation (integration) over the small time step (dt_sim).
+    
+    CRITICAL FIX: Uses RK4 integration instead of Euler for stability.
     """
 
     def __init__(self, config_path):
@@ -47,6 +49,8 @@ class GliderDynamics:
         Numerical, continuous-time state-space model (X_dot = f(X, U, W_atm)).
         Uses NumPy for calculations.
         """
+        # Ensure X is an array for safety, although it should be one
+        X = np.asarray(X)
         vx, vy, vz = X[3], X[4], X[5]
         
         V_ground = np.array([vx, vy, vz])
@@ -99,17 +103,32 @@ class GliderDynamics:
 
     def update(self, CL_cmd, phi_cmd, dt_sim, atmospheric_model):
         """
-        Integrates the glider dynamics forward one time step (dt_sim) using Euler integration.
+        Integrates the glider dynamics forward one time step (dt_sim) using 
+        Fourth-Order Runge-Kutta (RK4) integration for stability.
         """
-        # Get atmospheric lift at the current glider position (x, y) and altitude (z)
+        # Get atmospheric lift at the current glider position
         x, y, z = self.X[0], self.X[1], self.X[2]
         W_atm_z = atmospheric_model.get_thermal_lift(x, y, z)
         
-        # Compute the state derivative (X_dot)
-        X_dot = self._state_dot(self.X, CL_cmd, phi_cmd, W_atm_z)
+        # --- RK4 Integration Steps ---
         
-        # Euler integration step
-        self.X = self.X + dt_sim * X_dot
+        # K1: Start slope
+        K1 = self._state_dot(self.X, CL_cmd, phi_cmd, W_atm_z)
+        
+        # K2: Midpoint slope 1
+        X2 = self.X + (dt_sim / 2.0) * K1
+        K2 = self._state_dot(X2, CL_cmd, phi_cmd, W_atm_z)
+        
+        # K3: Midpoint slope 2
+        X3 = self.X + (dt_sim / 2.0) * K2
+        K3 = self._state_dot(X3, CL_cmd, phi_cmd, W_atm_z)
+        
+        # K4: End slope
+        X4 = self.X + dt_sim * K3
+        K4 = self._state_dot(X4, CL_cmd, phi_cmd, W_atm_z)
+        
+        # Final state update: X_new = X_old + dt/6 * (K1 + 2*K2 + 2*K3 + K4)
+        self.X = self.X + (dt_sim / 6.0) * (K1 + 2.0 * K2 + 2.0 * K3 + K4)
         
         # Return the new state
         return self.X
