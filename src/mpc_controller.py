@@ -26,7 +26,7 @@ class MPCController:
         self.CL = glider_params.get('CL', 0.8) # Constant Lift Coefficient
         
         mpc_params = self.config.get('MPC', {})
-        # CRITICAL FIX: Further reduce horizon N from 10 to 8
+        # Final N for robustness (16s horizon with DT=2.0s)
         self.N = 8 
         self.DT = mpc_params.get('PREDICT_DT', 1.0) # Should load 2.0 from config
         self.Q_x = np.diag(mpc_params.get('STATE_WEIGHTS', [10.0, 10.0, 1.0, 0.1, 0.1, 0.1]))
@@ -186,8 +186,8 @@ class MPCController:
             dist_sq = (X[0, k+1] - Thermal_target[0])**2 + (X[1, k+1] - Thermal_target[1])**2
             J += 0.01 * dist_sq 
         
-        # Tertiary Objective: Penalize Slack Variable Use (High penalty)
-        J += 1000 * ca.sumsqr(S) 
+        # Tertiary Objective: Penalize Slack Variable Use (Reduced penalty for feasibility)
+        J += 100 * ca.sumsqr(S) # CRITICAL FIX: Reduced from 1000 to 100
 
         opti.minimize(J)
         
@@ -196,8 +196,7 @@ class MPCController:
             'ipopt': {
                 'max_iter': 3000, 
                 'print_level': 0, 
-                # CRITICAL FIX: Relax convergence tolerance to speed up the solve
-                'acceptable_tol': 1e-4, # Changed from 1e-6 to 1e-4
+                'acceptable_tol': 1e-4, 
                 'acceptable_obj_change_tol': 1e-6,
                 'max_cpu_time': 1.8, 
             },
