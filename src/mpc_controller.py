@@ -101,9 +101,9 @@ class MPCController:
         
         # Objective Function
         J = 0 
-        # CRITICAL FIX 1: Massively decrease distance weight (hyper-prioritize Z)
-        Q_dist = 0.001 
-        R_control = 0.1 
+        # Tuning: Hyper-survival
+        Q_dist = 0.001 # Distance cost is minimal
+        R_control = 0.1 # Smoothness is important
         
         # Cost Loop
         for k in range(self.N):
@@ -112,7 +112,7 @@ class MPCController:
             dist_sq = (X[0, k] - P_target[0])**2 + (X[1, k] - P_target[1])**2
             J += Q_dist * dist_sq
             
-            # 2. Survival Objective (Massively prioritize climbing)
+            # 2. Survival Objective (Massively prioritize climbing/duration)
             J += -50000 * X[2, k+1] # Maximize Z at the next step
             
             # 3. Control Effort / Smoothness
@@ -136,8 +136,10 @@ class MPCController:
         # 2. Control Bounds (Pitch/Alpha and Bank/Phi)
         DEG_TO_RAD = math.pi / 180.0
         opti.subject_to(opti.bounded(-45.0 * DEG_TO_RAD, U[0, :], 45.0 * DEG_TO_RAD))
+        
         # Pitch Angle (Alpha): Max lift maneuver allowed
-        opti.subject_to(opti.bounded(-5.0 * DEG_TO_RAD, U[1, :], 20.0 * DEG_TO_RAD))
+        # FIX: Increased lower bound control authority for smoother, lower drag flight if needed
+        opti.subject_to(opti.bounded(-10.0 * DEG_TO_RAD, U[1, :], 20.0 * DEG_TO_RAD))
         
         # 3. State Bounds
         Z_MIN = 20.0 # meters
@@ -145,8 +147,8 @@ class MPCController:
         opti.subject_to(S_alt >= 0.0)
         
         # Velocity Bounds 
-        # CRITICAL FIX 2: Raised V_MIN to 15.0 to stabilize the solver/Jacobian near high-lift maneuvers
-        V_MIN = 15.0 # m/s 
+        # FIX: Reverted V_MIN to 10.0 to allow for high-lift, slow-speed loitering
+        V_MIN = 10.0 # m/s 
         V_MAX = 50.0 # m/s 
         V_air = ca.sqrt(X[3, :]**2 + X[4, :]**2 + X[5, :]**2)
         opti.subject_to(V_air >= V_MIN)
@@ -162,7 +164,8 @@ class MPCController:
                 'print_level': 0, 
                 'acceptable_tol': 1e-6,
                 'acceptable_obj_change_tol': 1e-4,
-                'tol': 1e-4,
+                # FIX: Relaxing tolerance to 1e-3 to help solve the stability issue and converge
+                'tol': 1e-3, 
             },
             'print_time': 0,
         }
@@ -191,5 +194,6 @@ class MPCController:
             return U_optimal[:, 0] 
         
         except Exception as e:
-            print("\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
+            print(f"\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
             return np.array([0.0, 0.0])
+
