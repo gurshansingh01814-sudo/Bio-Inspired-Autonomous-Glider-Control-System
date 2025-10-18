@@ -1,29 +1,24 @@
 import numpy as np
 import yaml
-import sys
 import os
+import sys
 
 class AtmosphericModel:
     
     def __init__(self, config_path):
-        """Initializes the atmospheric model and thermal parameters."""
+        """Initializes atmospheric parameters and thermal properties."""
         
         self.config = self._load_config(config_path)
         
-        # Access parameters based on the corrected config file structure
-        atmos_params = self.config.get('ATMOSPHERE', {})
-        thermal_params = atmos_params.get('THERMAL', {})
+        # Load Thermal parameters
+        thermal_params = self.config.get('THERMAL', {})
+        self.thermal_center = np.array(thermal_params.get('center', [700.0, 0.0])) 
+        self.thermal_radius = thermal_params.get('radius', 100.0) 
+        self.W_z_max = thermal_params.get('max_lift', 4.0) 
         
-        self.center_x = thermal_params.get('center_x', 500.0)
-        self.center_y = thermal_params.get('center_y', 500.0)
-        self.radius = thermal_params.get('radius', 150.0)
-        
-        # CORRECTED KEY: using 'max_vertical_speed'
-        self.max_lift = thermal_params.get('max_vertical_speed', 3.0) 
-        
-        # ASSUMPTION: Using cloud_base from config
-        self.cloud_base = thermal_params.get('cloud_base', 1500.0) 
-        self.ground_alt = 50.0 # Min altitude where thermal still has full strength
+        # Load other environment params
+        env_params = self.config.get('ATMOSPHERE', {})
+        self.rho = env_params.get('rho_air', 1.225)
         
     def _load_config(self, path):
         """Loads configuration from a YAML file for internal use."""
@@ -37,34 +32,25 @@ class AtmosphericModel:
             print(f"FATAL: Could not load configuration file {path}: {e}")
             sys.exit(1)
 
+    # --- CRITICAL FIX: Add the missing getter method ---
+    def get_thermal_center(self):
+        """Returns the [x, y] coordinates of the thermal center."""
+        return self.thermal_center
+    # ----------------------------------------------------
+
     def get_thermal_lift(self, x, y, z):
-        """Calculates the vertical lift (Wz) at a given (x, y, z) position."""
+        """
+        Calculates the vertical wind (Wz) at a given (x, y, z) location.
+        This simplified model returns 0 outside the thermal radius, and W_z_max inside.
+        (A real model would use a smooth distribution).
+        """
+        # Calculate horizontal distance to the thermal center
+        dx = x - self.thermal_center[0]
+        dy = y - self.thermal_center[1]
+        horizontal_distance = np.sqrt(dx**2 + dy**2)
         
-        # --- 1. Radial Decay (Parabolic Model) ---
-        dist_h = np.sqrt((x - self.center_x)**2 + (y - self.center_y)**2)
-        
-        if dist_h >= self.radius:
-            radial_factor = 0.0 # Zero lift outside the defined radius
+        if horizontal_distance <= self.thermal_radius:
+            # Simple assumption: Full max lift inside the cylinder
+            return self.W_z_max
         else:
-            # parabolic decay: 1 - (r/R)^2
-            radial_factor = 1.0 - (dist_h / self.radius)**2 
-        
-        # --- 2. Altitude Decay (Realistic decay from base to cloud base) ---
-        if z <= self.ground_alt or z >= self.cloud_base:
-            alt_factor = 0.0
-        else:
-            mid_alt = (self.cloud_base + self.ground_alt) / 2.0
-            
-            if z < mid_alt:
-                # Ramp up from ground to mid_alt
-                alt_factor = (z - self.ground_alt) / (mid_alt - self.ground_alt)
-            else:
-                # Decay down from mid_alt to cloud_base
-                alt_factor = (self.cloud_base - z) / (self.cloud_base - mid_alt)
-        
-        alt_factor = np.clip(alt_factor, 0.0, 1.0)
-        
-        # --- 3. Total Vertical Speed ---
-        Wz = self.max_lift * radial_factor * alt_factor
-        
-        return Wz
+            return 0.0 # No lift outside
