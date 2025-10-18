@@ -151,11 +151,14 @@ class MPCController:
         # --- 1. NLP Setup ---
         opti = ca.Opti()
         
-        # Decision Variables (Control trajectory U)
-        U = opti.variable(NU, self.N) # Control inputs over horizon
+        # Decision Variables
+        U = opti.variable(NU, self.N)       # Control trajectory
+        X = opti.variable(NX, self.N + 1)   # State trajectory
         
-        # State trajectory (for continuity constraints)
-        X = opti.variable(NX, self.N + 1)
+        # CRITICAL FIX 1: Add Slack Variable (S) for Altitude Constraint
+        # S is a positive variable to relax the minimum altitude constraint
+        S = opti.variable(1, self.N + 1)
+        opti.subject_to(S >= 0)
         
         # Parameters (P): Current state, Thermal Target, Wind
         P = opti.parameter(NX + 3) 
@@ -163,38 +166,32 @@ class MPCController:
         Thermal_target = P[NX:] # [Target_X, Target_Y, Thermal_Radius]
 
         # --- 2. Initial Condition Constraint ---
-        # The first state must match the current system state
         opti.subject_to(X[:, 0] == X_current)
         
         # --- 3. Dynamic Constraints (Equality Constraints) ---
-        # Apply the dynamics over the horizon
         for k in range(self.N):
-            # NOTE: For simplicity, we assume zero wind in the prediction horizon. 
-            # In a full project, W_atm would also be a parameter or variable.
-            # Here, we pass a zero wind vector [0, 0, 0] for prediction.
             opti.subject_to(X[:, k+1] == F_map(X[:, k], U[:, k], ca.vertcat(0, 0, 0)))
             
-        # --- 4. Bounds and Constraints (Inequality Constraints) ---
+        # --- 4. Bounds and Constraints ---
         
-        # --- CRITICAL FIX: CONVERT DEGREES TO RADIANS MANUALLY ---
+        # Degree to Radian conversion factor
         DEG_TO_RAD = ca.pi / 180.0
         
         # Control Bounds:
-        # Bank Angle (phi): +/- 45 degrees
-        opti.subject_to(opti.bounded(-45.0 * DEG_TO_RAD, U[0, :], 45.0 * DEG_TO_RAD)) 
-        # Effective Pitch (alpha): Lift-generating range (-5 to +10 degrees)
-        opti.subject_to(opti.bounded(-5.0 * DEG_TO_RAD, U[1, :], 10.0 * DEG_TO_RAD))
-        # --------------------------------------------------------
+        opti.subject_to(opti.bounded(-45.0 * DEG_TO_RAD, U[0, :], 45.0 * DEG_TO_RAD)) # Bank Angle (phi)
+        opti.subject_to(opti.bounded(-5.0 * DEG_TO_RAD, U[1, :], 10.0 * DEG_TO_RAD))  # Effective Pitch (alpha)
 
         # State Bounds:
-        # Altitude Constraint (z must be > MIN_ALTITUDE)
-        opti.subject_to(X[2, :] >= self.ALT_MIN) 
+        # Altitude Constraint (Softened): z + S >= ALT_MIN
+        # If z drops below ALT_MIN, S must become positive to satisfy the constraint.
+        for k in range(self.N + 1):
+             opti.subject_to(X[2, k] + S[0, k] >= self.ALT_MIN) 
         
-        # Velocity Bounds (Simple safe velocity range, e.g., 5 to 30 m/s)
+        # Velocity Bounds (5 to 30 m/s)
         opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 >= 5.0**2)
         opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 <= 30.0**2)
         
-        # --- 5. Objective Function (Minimize Energy and Maximize Lift/Target) ---
+        # --- 5. Objective Function ---
         J = 0 
         
         for k in range(self.N):
@@ -202,13 +199,15 @@ class MPCController:
             J += ca.mtimes([U[:, k].T, self.R_u, U[:, k]]) 
 
             # Primary Objective: Maximize altitude
-            J += -100 * X[2, k+1]
+            # CRITICAL FIX 2: INCREASE ALTITUDE WEIGHT to -500
+            J += -500 * X[2, k+1] 
             
             # Secondary Objective: Navigate towards the thermal (Minimize horizontal distance squared)
             dist_sq = (X[0, k+1] - Thermal_target[0])**2 + (X[1, k+1] - Thermal_target[1])**2
-            # Use a dead-band or soft approach: minimize distance only outside the radius
-            # This is hard to model with soft logic in IPOPT, so we use distance squared as a proxy
             J += 0.01 * dist_sq 
+        
+        # Tertiary Objective: Penalize Slack Variable Use (Cost of violating the soft altitude constraint)
+        J += 1000 * ca.sumsqr(S) # High penalty for non-zero slack
 
         opti.minimize(J)
         
