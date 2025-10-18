@@ -5,19 +5,13 @@ import os
 import sys
 
 class MPCController:
-    """
-    Implements a Model Predictive Controller using CasADi/IPOPT 
-    to guide the glider toward thermal lift sources while managing altitude.
-    """
     
     def __init__(self, full_config_path):
-        # 1. Configuration Loading
         self.config = self._load_config(full_config_path)
         
-        # 2. Glider and Environment Parameters (from config)
+        # Glider and Environment Parameters (omitted for brevity)
         self.g = 9.81
         self.rho = 1.225 
-        
         glider_params = self.config.get('GLIDER', {})
         self.m = glider_params.get('mass', 700.0)
         self.S = glider_params.get('S', 14.0)
@@ -28,17 +22,14 @@ class MPCController:
         mpc_params = self.config.get('MPC', {})
         self.N = 8 
         self.DT = mpc_params.get('PREDICT_DT', 1.0) 
-        
         default_Qx = [5.0, 5.0, 1.0, 0.1, 0.1, 0.1] 
         self.Q_x = np.diag(mpc_params.get('STATE_WEIGHTS', default_Qx))
         self.R_u = np.diag(mpc_params.get('CONTROL_WEIGHTS', [0.1, 0.1]))
         self.ALT_MIN = mpc_params.get('MIN_ALTITUDE', 20.0)
         self.EPSILON_AIRSPEED = 1e-6 
 
-        # 3. Setup CasADi Problem (Dynamics, Solver)
         self.solver = self._setup_solver()
         
-        # 4. Storage for initial guess (warm start)
         self.U_prev = np.zeros((2, self.N))
         self.X_prev = None 
         self.last_successful_u = np.array([0.0, 0.0])
@@ -60,40 +51,33 @@ class MPCController:
         x = ca.SX.sym('x'); y = ca.SX.sym('y'); z = ca.SX.sym('z')
         vx = ca.SX.sym('vx'); vy = ca.SX.sym('vy'); vz = ca.SX.sym('vz')
         X = ca.vertcat(x, y, z, vx, vy, vz)
-        NX = X.shape[0]
-
+        
         phi = ca.SX.sym('phi'); alpha = ca.SX.sym('alpha')
         U = ca.vertcat(phi, alpha)
-        NU = U.shape[0]
-
+        
         Wx = ca.SX.sym('Wx'); Wy = ca.SX.sym('Wy'); Wz = ca.SX.sym('Wz')
         W_atm_casadi = ca.vertcat(Wx, Wy, Wz)
         
-        # --- Dynamics equations (detailed math omitted for brevity) ---
+        # --- Dynamics (RK4 integration definition) ---
         V_ground = ca.vertcat(vx, vy, vz)
         V_air_vec = V_ground - W_atm_casadi
         V_air_mag = ca.sqrt(ca.sumsqr(V_air_vec))
         V_reg = ca.sqrt(V_air_mag**2 + self.EPSILON_AIRSPEED)
         e_v = V_air_vec / V_reg
-        
         CD = self.CD0 + self.K * self.CL**2 
         L_mag = 0.5 * self.rho * self.S * self.CL * V_reg**2
         D_mag = 0.5 * self.rho * self.S * CD * V_reg**2
         D_vec = -D_mag * e_v
-        
         L_x = ca.if_else(ca.fabs(V_reg) < 1e-3, 0.0, L_mag * ca.sin(phi) * e_v[1] / V_reg)
         L_y = ca.if_else(ca.fabs(V_reg) < 1e-3, 0.0, L_mag * -ca.sin(phi) * e_v[0] / V_reg)
         L_z_pitch = L_mag * ca.cos(phi) * ca.cos(alpha) 
         L_vec = ca.vertcat(L_x, L_y, L_z_pitch)
-        
         G_vec = ca.vertcat(0.0, 0.0, -self.m * self.g)
         F_total = L_vec + D_vec + G_vec
         a_vec = F_total / self.m
-
         X_dot = ca.vertcat(V_ground, a_vec)
         f = ca.Function('f', [X, U, W_atm_casadi], [X_dot])
         
-        # Discrete-time map (Runge-Kutta 4)
         M = 4 
         DT_RK4 = self.DT / M
         X_k = X
@@ -107,19 +91,21 @@ class MPCController:
         F_map = ca.Function('F_map', [X, U, W_atm_casadi], [X_k], 
                             ['x_in', 'u_in', 'p_in'], ['x_next'])
 
-        return NX, NU, F_map
+        return X.shape[0], U.shape[0], F_map
 
     def _setup_solver(self):
         """Sets up the CasADi optimization problem (NLP)."""
         
         NX, NU, F_map = self._setup_dynamics()
         
-        # --- 1. NLP Setup ---
+        # --- 1. NLP Setup: Decision Variables ---
         opti = ca.Opti()
         U = opti.variable(NU, self.N)       
         X = opti.variable(NX, self.N + 1)   
-        S = opti.variable(1, self.N + 1) 
-        opti.subject_to(S >= 0)
+        S_alt = opti.variable(1, self.N + 1) # Altitude Slack
+        S_vel = opti.variable(1, self.N + 1) # CRITICAL: Airspeed Slack
+        opti.subject_to(S_alt >= 0)
+        opti.subject_to(S_vel >= 0)
         
         P = opti.parameter(NX + 3) 
         X_current = P[:NX]
@@ -134,17 +120,18 @@ class MPCController:
         
         # Control Bounds:
         opti.subject_to(opti.bounded(-45.0 * DEG_TO_RAD, U[0, :], 45.0 * DEG_TO_RAD)) # Bank Angle (phi)
-        
-        # CRITICAL FIX 1: Loosen pitch upper bound for feasibility (10.0 -> 15.0 deg)
         opti.subject_to(opti.bounded(-5.0 * DEG_TO_RAD, U[1, :], 15.0 * DEG_TO_RAD))  # Effective Pitch (alpha)
 
         # State Bounds:
         for k in range(self.N + 1):
-             opti.subject_to(X[2, k] + S[0, k] >= self.ALT_MIN) 
+             opti.subject_to(X[2, k] + S_alt[0, k] >= self.ALT_MIN) # Soft Altitude
         
-        # Velocity Bounds 
-        opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 >= 4.5**2) 
-        opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 <= 30.0**2)
+        # CRITICAL FIX 1: Soft Minimum Velocity Constraint
+        V_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
+        opti.subject_to(V_sq + S_vel[0, :] >= 4.5**2) 
+        
+        # Hard Maximum Velocity Constraint (not causing infeasibility, keep hard)
+        opti.subject_to(V_sq <= 30.0**2) 
         
         # --- 3. Objective Function ---
         J = 0 
@@ -155,19 +142,20 @@ class MPCController:
             dist_sq = (X[0, k+1] - Thermal_target[0])**2 + (X[1, k+1] - Thermal_target[1])**2
             J += 0.01 * dist_sq 
         
-        J += 100 * ca.sumsqr(S) 
+        # CRITICAL FIX 2: Penalize both slack variables
+        J += 100 * ca.sumsqr(S_alt) 
+        J += 500 * ca.sumsqr(S_vel) # High penalty to keep airspeed constraint active
 
         opti.minimize(J)
         
-        # --- 4. Solver Options ---
+        # --- 4. Solver Options (Maintained for maximum stability) ---
         opts = {
             'ipopt': {
                 'max_iter': 3000, 
                 'print_level': 0, 
-                # CRITICAL FIX 2: Relax acceptable tolerance for faster, successful convergence
                 'acceptable_tol': 2e-4, 
                 'acceptable_obj_change_tol': 1e-6,
-                'max_cpu_time': 1.95, # Maintained at maximum allowed time
+                'max_cpu_time': 1.95, 
             },
             'print_time': False,
         }
@@ -180,6 +168,7 @@ class MPCController:
         
         return opti.to_function('solver', [P], [U])
 
+    # ... compute_control method (kept the same for warm start logic) ...
     def compute_control(self, current_state, thermal_center, thermal_radius):
         """
         Computes the next optimal control input based on the current state.
@@ -197,7 +186,7 @@ class MPCController:
         else:
              initial_x_guess = np.tile(current_state, (self.N + 1, 1)).T
              self.opti.set_initial(self.X, initial_x_guess)
-             self.X_prev = initial_x_guess # Initialize X_prev after the first run
+             self.X_prev = initial_x_guess 
         
         # --- Solve NLP ---
         try:
@@ -218,5 +207,7 @@ class MPCController:
             print("\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
             print(f"Error: {e}")
             
+            # This handles the Max_CpuTime_Exceeded failure gracefully
+            # and prevents Infeasible_Problem_Detected from blocking execution
             self.X_prev = None 
             return self.last_successful_u
