@@ -118,6 +118,9 @@ class MPCController:
         U = opti.variable(self.NU, self.N)
         S_alt = opti.variable(1, self.N + 1) # Slack for altitude constraint
         
+        # V_air_sq is a symbolic expression defined over all N+1 steps
+        V_air_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
+
         # Parameters
         P_init = opti.parameter(self.NX, 1)
         P_target = opti.parameter(2, 1) 
@@ -171,7 +174,6 @@ class MPCController:
         # Velocity Bounds and Stability Constraint
         V_MIN = 6.0 
         V_MAX = 50.0 
-        V_air_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
         
         # 1. Minimum and Maximum Airspeed constraint
         opti.subject_to(V_air_sq >= V_MIN**2- S_alt) # Enforce minimum velocity squared
