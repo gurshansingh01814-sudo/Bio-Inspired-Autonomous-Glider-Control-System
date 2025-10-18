@@ -3,30 +3,63 @@ import yaml
 import time
 import os
 import sys
-import pandas as pd
-# Add these imports at the top
 import datetime
-# Other imports like GliderDynamics, MPCController, Thermal, etc. are assumed to be present
+import pandas as pd
 
-# ... (The GliderControlSystem class definition remains mostly the same, 
-# but we add a 'results' attribute and modify the main_loop method) ...
+# CRITICAL: Ensure these imports point to the correct files.
+# Assuming 'src' and 'sim' are parallel directories, use relative imports.
+# Adjust these paths if your file structure is different.
+try:
+    from src.mpc_controller import MPCController
+    # Assuming GliderDynamics and Thermal classes are defined or imported from files
+    from sim.glider_dynamics import GliderDynamics 
+    from sim.thermal_model import Thermal 
+except ImportError as e:
+    print(f"FATAL: Missing a required class import: {e}")
+    sys.exit(1)
+
 
 class GliderControlSystem:
-    # ... (rest of __init__ and other methods) ...
+    # --- Configuration Paths ---
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    CONFIG_PATH = os.path.join(BASE_DIR, 'config', 'glider_config.yaml')
 
-    def main_loop(self):
-        # Initial conditions and simulation setup
-        T_start = 0.0
-        T_end = 400.0
-        DT = self.mpc.DT # 2.0s
-        current_state = self.glider.get_state()
+    def __init__(self):
+        print(f"Attempting to load config from: {self.CONFIG_PATH}")
+        self.config = self._load_config(self.CONFIG_PATH)
+
+        # --- Initialization of Components (CRITICAL FOR SELF.MPC) ---
+        self.glider = GliderDynamics(self.config)
+        self.thermal = Thermal(self.config)
         
-        # New: Initialize data logging
+        # This line must execute successfully to create self.mpc
+        self.mpc = MPCController(self.CONFIG_PATH) 
+        
+        # Data logging initialization
         self.results = []
+        self.last_results_path = None
         
+        print("System initialized successfully.")
+
+    def _load_config(self, path):
+        """Loads configuration from a YAML file."""
+        try:
+            with open(path, 'r') as f:
+                return yaml.safe_load(f)
+        except Exception as e:
+            print(f"FATAL: Could not load configuration file {path}: {e}")
+            sys.exit(1)
+
+    # --- MAIN LOOP (Now correctly placed inside the class) ---
+    def main_loop(self):
+        T_end = 400.0
+        # CRITICAL: Access self.mpc.DT only after self.mpc is initialized
+        DT = self.mpc.DT 
+        
+        current_state = self.glider.get_state()
         print("Starting simulation loop...")
 
-        t = T_start
+        t = 0.0
         
         while t < T_end:
             
@@ -34,19 +67,19 @@ class GliderControlSystem:
             thermal_center = np.array([self.thermal.center_x, self.thermal.center_y])
             thermal_radius = self.thermal.radius
             
-            # Compute optimal control (bank angle phi, pitch alpha)
             u_star = self.mpc.compute_control(current_state, thermal_center, thermal_radius)
             phi_command, alpha_command = u_star[0], u_star[1]
             
             # --- Logging Data ---
+            current_state_list = current_state.tolist()
             self.results.append({
                 'time': t,
-                'x': current_state[0],
-                'y': current_state[1],
-                'z': current_state[2],
-                'vx': current_state[3],
-                'vy': current_state[4],
-                'vz': current_state[5],
+                'x': current_state_list[0],
+                'y': current_state_list[1],
+                'z': current_state_list[2],
+                'vx': current_state_list[3],
+                'vy': current_state_list[4],
+                'vz': current_state_list[5],
                 'phi': phi_command,
                 'alpha': alpha_command,
                 'Wz': self.thermal.get_thermal_lift(current_state[0], current_state[1], current_state[2]),
@@ -54,7 +87,6 @@ class GliderControlSystem:
             })
 
             # --- Dynamics Step ---
-            # Glider updates its state over the time interval DT
             next_state = self.glider.update(phi_command, alpha_command, DT, self.thermal)
             current_state = next_state
             t += DT
@@ -68,7 +100,6 @@ class GliderControlSystem:
                 print("\n--- LANDING / CRASH: Minimum altitude reached. Simulation terminated. ---")
                 break
             
-            # Simple 500 meter distance exit condition (optional)
             if self.results[-1]['dist_to_center'] > 1000:
                 print("\n--- Too far from thermal. Simulation terminated. ---")
                 break
@@ -81,44 +112,30 @@ class GliderControlSystem:
         if not hasattr(self, 'results') or not self.results:
             return
 
-        # Create a results directory if it doesn't exist
-        results_dir = os.path.join(os.path.dirname(__file__), '..', 'results')
+        results_dir = os.path.join(self.BASE_DIR, 'results')
         os.makedirs(results_dir, exist_ok=True)
         
-        # Generate a timestamped filename
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filepath = os.path.join(results_dir, f"flight_data_{timestamp}.csv")
         
-        # Convert list of dictionaries to a pandas DataFrame and save
         df = pd.DataFrame(self.results)
         df.to_csv(filepath, index=False)
         print(f"\nSimulation results saved to: {filepath}")
-
-        # Store the path for the plotting script
         self.last_results_path = filepath
 
 
 if __name__ == '__main__':
-    # Ensure pandas is available
+    # Ensure dependencies are available for data logging
     try:
         import pandas as pd
-    except ImportError:
-        print("Pandas is required for data logging and saving. Please install it: pip install pandas")
-        sys.exit(1)
-        
-    # Ensure matplotlib is available for the next script
-    try:
         import matplotlib.pyplot as plt
     except ImportError:
-        print("Matplotlib is required for plotting. Please install it: pip install matplotlib")
-        # Do not exit here, allow the simulation to run and save data
+        print("ERROR: Please run 'pip install pandas matplotlib' to enable data logging and plotting.")
+        sys.exit(1)
         
     system = GliderControlSystem()
     system.main_loop()
 
-    # Pass the path to the plotter if available
-    if hasattr(system, 'last_results_path') and 'matplotlib.pyplot' in sys.modules:
-        plot_script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'plot_results.py')
-        print(f"\nPlotting script will try to load data from: {system.last_results_path}")
-        # Note: In a real system, you would execute the plotting script here.
-        # For this environment, we just instruct the user to run the next script.
+    if hasattr(system, 'last_results_path') and system.last_results_path:
+        # Inform the user how to plot the data
+        print(f"\nSimulation successful. Run 'python scripts/plot_results.py' to visualize the flight data stored in {system.last_results_path}")
