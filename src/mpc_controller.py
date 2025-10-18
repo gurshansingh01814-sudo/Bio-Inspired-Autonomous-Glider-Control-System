@@ -33,7 +33,7 @@ class MPCController:
         self.g = ca.MX(env_params.get('gravity', 9.81))
         self.rho = ca.MX(env_params.get('rho_air', 1.225))
         self.EPSILON_AIRSPEED = 1e-6 # Used for V_reg denominator
-        self.EPSILON_LIFT = 1e-6     # Used for lift vector regularization
+        self.EPSILON_LIFT = 1e-4     # CRITICAL FIX: Robust regularization for lift vector
 
         # Problem Setup (State and Control Dimensions)
         self.NX = 6 # [x, y, z, vx, vy, vz]
@@ -82,7 +82,7 @@ class MPCController:
         dot_product = ca.dot(e_z, e_v)
         e_L_raw = e_z - dot_product * e_v 
         
-        # FIX (from previous step): Regularize the magnitude of e_L_raw to prevent NaN
+        # CRITICAL FIX: Robust regularization for lift vector calculation
         L_raw_mag_reg = ca.norm_2(e_L_raw) + self.EPSILON_LIFT
         L_vert_unit = e_L_raw / L_raw_mag_reg
         
@@ -115,7 +115,7 @@ class MPCController:
         # Parameters
         P_init = opti.parameter(self.NX, 1)
         P_target = opti.parameter(2, 1) 
-        P_Wz = opti.parameter(1, self.N)  # Thermal lift (Wz) over the horizon
+        P_Wz = opti.parameter(1, self.N) # Thermal lift (Wz) over the horizon
         
         # Objective Function
         J = 0 
@@ -192,6 +192,7 @@ class MPCController:
             return U_optimal[:, 0] 
         
         except Exception as e:
-            # FIX: Ensure the fallback is a FEASIBLE command: CL_MIN is 0.2
-            # This prevents the simulation from crashing if the solver fails.
+            # Fallback to a feasible, minimum-drag glide command
+            # The simulator will use this if the MPC problem fails.
+            # CL_MIN = 0.2
             return np.array([self.CL_MIN, 0.0])
