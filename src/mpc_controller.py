@@ -9,7 +9,7 @@ class MPCController:
     def __init__(self, full_config_path):
         self.config = self._load_config(full_config_path)
         
-        # Glider and Environment Parameters (omitted for brevity)
+        # Glider and Environment Parameters 
         self.g = 9.81
         self.rho = 1.225 
         glider_params = self.config.get('GLIDER', {})
@@ -20,12 +20,11 @@ class MPCController:
         self.CL = glider_params.get('CL', 0.8) 
         
         mpc_params = self.config.get('MPC', {})
-        # FIX 1: Reduced N for faster solution time (Recommended for real-time systems)
+        # FIX 1: N reduced for faster solution time
         self.N = mpc_params.get('N', 10) 
-        self.DT = mpc_params.get('DT', 2.0) # Synchronized DT from config
+        self.DT = mpc_params.get('DT', 2.0) 
         
-        # FIX 2: Increased Z-Position (Altitude) Weight from 1.0 to 10.0
-        # This makes the altitude state more important in the Q matrix
+        # FIX 2: Increased Z-Position (Altitude) Weight 
         default_Qx = [5.0, 5.0, 10.0, 0.1, 0.1, 0.1] 
         self.Q_x = np.diag(mpc_params.get('STATE_WEIGHTS', default_Qx))
         self.R_u = np.diag(mpc_params.get('CONTROL_WEIGHTS', [0.1, 0.1]))
@@ -47,7 +46,8 @@ class MPCController:
             with open(path, 'r') as f:
                 return yaml.safe_load(f)
         except Exception as e:
-            print(f"FATAL: Could not load configuration file {path}: {e}")
+            # Note: This MPC class is initialized with the full path string, so it loads config internally.
+            print(f"FATAL: Could not load configuration file {path} for MPC: {e}")
             sys.exit(1)
 
     def _setup_dynamics(self):
@@ -148,7 +148,6 @@ class MPCController:
             J += ca.mtimes([U[:, k].T, self.R_u, U[:, k]]) 
             
             # FIX 3: INCREASED ALTITUDE MAXIMIZATION WEIGHT from -300 to -1000
-            # This forces the glider to climb aggressively when lift is available.
             J += -1000 * X[2, k+1] 
             
             # Target Attraction (Weight 1.0)
@@ -165,7 +164,7 @@ class MPCController:
 
         opti.minimize(J)
         
-        # --- 4. Solver Options (Speed Tuning) ---
+        # --- 4. Solver Options (IPOPT Compatibility and Speed Tuning) ---
         opts = {
             'ipopt': {
                 'max_iter': 5000, 
@@ -175,7 +174,7 @@ class MPCController:
                 'acceptable_obj_change_tol': 1e-4, 
                 'acceptable_constr_viol_tol': 1e-3, 
                 'max_cpu_time': 2.0, 
-                'fast_accept_ic_w_obj_times': 1, 
+                # CRITICAL FIX: Removed unsupported option 'fast_accept_ic_w_obj_times'
                 'warm_start_init_point': 'yes', 
             },
             'print_time': False,
@@ -225,5 +224,5 @@ class MPCController:
         except Exception as e:
             # If solver fails (which should be rare now)
             print("\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
-            print(f"Error: {e}")
+            # Do not print the full traceback here to keep the terminal clean during operation
             return self.last_successful_u
