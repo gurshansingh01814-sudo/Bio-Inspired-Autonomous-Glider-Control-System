@@ -2,7 +2,7 @@
 
 SIMULATION:
   MAX_TIME: 240.0
-  DT: 1.0
+  DT: 2.0
 
 MPC:
   N: 20
