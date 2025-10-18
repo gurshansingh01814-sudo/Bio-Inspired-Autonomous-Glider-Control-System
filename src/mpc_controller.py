@@ -130,11 +130,11 @@ class MPCController:
         J = 0 
         
         # Define Tuning Weights
-        W_CLIMB = 10.0         
-        W_SMOOTH = 2.0     
-        W_DIST = 0.1        
+        W_CLIMB = 1.0         
+        W_SMOOTH = 1.0     
+        W_DIST = 0.5        
         W_SLACK = 5000.0 
-        W_AIRSPEED = 5     
+        W_AIRSPEED = 20    
 
         # Cost Loop
         for k in range(self.N):
