@@ -13,7 +13,7 @@ try:
     from src.mpc_controller import MPCController
     # Assuming GliderDynamics and Thermal classes are defined or imported from files
     from src.glider_dynamics import GliderDynamics 
-    from src.atmospheric_model import Thermal 
+    from src.atmospheric_model import AtmosphericModel as Thermal
 except ImportError as e:
     print(f"FATAL: Missing a required class import: {e}")
     sys.exit(1)
