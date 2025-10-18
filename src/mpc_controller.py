@@ -5,236 +5,269 @@ import os
 import sys
 
 class MPCController:
-    # Now accepts the absolute path to the config file
+    """
+    Implements a Model Predictive Controller using CasADi/IPOPT 
+    to guide the glider toward thermal lift sources while managing altitude.
+    """
+    
     def __init__(self, full_config_path):
+        # 1. Configuration Loading
+        self.config = self._load_config(full_config_path)
         
-        # --- 1. Load Configuration ---
-        self.config = {} # Initialize as an empty dict
+        # 2. Glider and Environment Parameters (from config)
+        self.g = 9.81
+        self.rho = 1.225 # Air density
+        
+        glider_params = self.config.get('GLIDER', {})
+        self.m = glider_params.get('mass', 700.0)
+        self.S = glider_params.get('S', 14.0)
+        self.CD0 = glider_params.get('CD0', 0.015)
+        self.K = glider_params.get('K', 0.04)
+        self.CL = glider_params.get('CL', 0.8) # Constant Lift Coefficient
+        
+        mpc_params = self.config.get('MPC', {})
+        self.N = mpc_params.get('HORIZON_STEPS', 20)
+        self.DT = mpc_params.get('PREDICT_DT', 1.0)
+        self.Q_x = np.diag(mpc_params.get('STATE_WEIGHTS', [10.0, 10.0, 1.0, 0.1, 0.1, 0.1]))
+        self.R_u = np.diag(mpc_params.get('CONTROL_WEIGHTS', [0.1, 0.1]))
+        self.ALT_MIN = mpc_params.get('MIN_ALTITUDE', 20.0)
+        self.EPSILON_AIRSPEED = 1e-6 # CRITICAL: For numerical stability in CasADi
+
+        # 3. Setup CasADi Problem (Dynamics, Solver)
+        self.solver = self._setup_solver()
+        
+        # 4. Storage for initial guess (warm start)
+        self.U_prev = np.zeros((2, self.N))
+        self.X_prev = np.zeros((6, self.N + 1))
+
+    def _load_config(self, path):
+        """Loads configuration from a YAML file."""
         try:
-            with open(full_config_path, 'r') as f:
-                self.config = yaml.safe_load(f)
-            
-            # Explicitly check if loading resulted in a dictionary
-            if not isinstance(self.config, dict):
-                 raise ValueError("YAML file loaded but content is not a dictionary.")
-
+            with open(path, 'r') as f:
+                return yaml.safe_load(f)
         except Exception as e:
-            # The main script guarantees the file exists, so this catches parsing errors.
-            print(f"FATAL: YAML parsing error in MPCController: {e}")
+            print(f"FATAL: Could not load configuration file {path}: {e}")
             sys.exit(1)
-            
-        # --- 2. MPC Parameters (Assured to exist now) ---
-        self.N = self.config['MPC']['N']
-        self.DT = self.config['MPC']['DT']
-        self.GLIDER_PARAMS = self.config['GLIDER']
-        self.CONSTRAINTS = self.config['CONSTRAINTS']
-        
-        # --- 3. Stability Parameter ---
-        # Used to prevent division by zero in V_air calculation
-        self.EPSILON_AIRSPEED = 1e-6 
-        
-        # --- 4. Initialize Optimization Problem ---
-        self.solver = self._setup_optimization_problem()
-        
-        # --- 5. Warm-Start Storage ---
-        self.X_opt = None
-        self.U_opt = None
 
-    def _get_glider_dynamics(self, x, u, thermal_params):
-        """
-        Defines the continuous-time dynamics (dx/dt = f(x, u, p)) in CasADi symbolic form.
-        State x = [x, y, z, vx, vy, vz] (6 states)
-        Control u = [phi, alpha] (Bank angle, Angle of Attack)
-        Parameter p = [cx, cy, radius] (Thermal parameters)
-        """
-        # --- Unpack State and Control ---
-        x_pos, y_pos, z_pos, vx, vy, vz = ca.vertsplit(x)
-        phi, alpha = ca.vertsplit(u)
+    def _setup_dynamics(self):
+        """Defines the symbolic non-linear glider dynamics using CasADi."""
         
-        # --- Unpack Glider Parameters ---
-        m = self.GLIDER_PARAMS['mass']
-        g = 9.81
-        rho = 1.225
-        S = self.GLIDER_PARAMS['S']
-        CD0 = self.GLIDER_PARAMS['CD0']
-        K = self.GLIDER_PARAMS['K']
-        CL = self.GLIDER_PARAMS['CL'] 
-        
-        # --- Unpack Thermal Parameters ---
-        cx, cy, radius = ca.vertsplit(thermal_params)
+        # --- State (X) and Control (U) Variables ---
+        # X: [x, y, z, vx, vy, vz] (Position and Velocity)
+        x = ca.SX.sym('x'); y = ca.SX.sym('y'); z = ca.SX.sym('z')
+        vx = ca.SX.sym('vx'); vy = ca.SX.sym('vy'); vz = ca.SX.sym('vz')
+        X = ca.vertcat(x, y, z, vx, vy, vz)
+        NX = X.shape[0]
 
-        # --- Atmospheric Wind (W_atm) ---
-        dist = ca.sqrt((x_pos - cx)**2 + (y_pos - cy)**2)
-        W_z_max = 3.0 
-        
-        dist_ratio = dist / radius
-        # Smooth cosine model for uplift
-        W_z = ca.if_else(dist < radius, W_z_max * (ca.cos(ca.pi * dist_ratio) + 1.0) / 2.0, 0.0)
-        W_atm_vec = ca.vertcat(0.0, 0.0, W_z)
-        
-        # --- Airspeed and Unit Vector (V_air) ---
-        V_ground_vec = ca.vertcat(vx, vy, vz)
-        V_air_vec = V_ground_vec - W_atm_vec
+        # U: [phi, alpha] (Bank Angle, Effective Pitch Angle)
+        phi = ca.SX.sym('phi'); alpha = ca.SX.sym('alpha')
+        U = ca.vertcat(phi, alpha)
+        NU = U.shape[0]
 
-        # V_air magnitude (CRITICAL FIX: Use regularization to prevent NaN)
-        V_air_sq = ca.dot(V_air_vec, V_air_vec)
-        V_reg = ca.sqrt(V_air_sq + self.EPSILON_AIRSPEED) # Stability Epsilon
+        # Parameter (P): [Wx, Wy, Wz] (Atmospheric Wind Vector)
+        Wx = ca.SX.sym('Wx'); Wy = ca.SX.sym('Wy'); Wz = ca.SX.sym('Wz')
+        W_atm_casadi = ca.vertcat(Wx, Wy, Wz)
         
-        e_v = V_air_vec / V_reg # Unit vector of V_air (direction of relative wind)
-
-        # --- Aerodynamic Forces ---
-        CD = CD0 + K * CL**2
+        # --- 1. Velocity Dynamics ---
+        V_ground = ca.vertcat(vx, vy, vz)
+        V_air_vec = V_ground - W_atm_casadi
         
-        L_mag = 0.5 * rho * S * CL * V_reg**2
-        D_mag = 0.5 * rho * S * CD * V_reg**2
+        # Airspeed magnitude
+        V_air_mag = ca.sqrt(ca.sumsqr(V_air_vec))
         
+        # --- 2. CRITICAL: Regularization for Stability ---
+        # V_reg: Used for both unit vector and force calculation
+        V_reg = ca.sqrt(V_air_mag**2 + self.EPSILON_AIRSPEED)
+        
+        # Unit vector of air velocity (e_v)
+        e_v = V_air_vec / V_reg
+        
+        # --- 3. Aerodynamic Forces ---
+        
+        # Total Drag Coefficient (simplified)
+        CD = self.CD0 + self.K * self.CL**2 
+        
+        # Lift and Drag Magnitudes (using V_reg)
+        L_mag = 0.5 * self.rho * self.S * self.CL * V_reg**2
+        D_mag = 0.5 * self.rho * self.S * CD * V_reg**2
+        
+        # Drag Vector (always opposite e_v)
         D_vec = -D_mag * e_v
         
-        # Lift Force simplified projection
-        L_x = L_mag * ca.sin(phi) * ca.sin(alpha) 
-        L_y = -L_mag * ca.cos(phi) * ca.sin(alpha) 
-        L_z = L_mag * ca.cos(alpha) 
-        L_vec = ca.vertcat(L_x, L_y, L_z)
-
-        # --- Total Force & Acceleration ---
-        G_vec = ca.vertcat(0.0, 0.0, -m * g)
+        # Lift Vector (Simplified projection using controls)
+        # Note: This is a placeholder for a complex coordinate transformation 
+        # and assumes control inputs (phi, alpha) are approximately relative to V_air.
+        
+        # Lift is orthogonal to V_air. For this simplified case, we model it as:
+        # A horizontal component for turning (bank: phi)
+        # A vertical component for pitch/climb (pitch: alpha)
+        
+        # NOTE: A more correct model would use a rotation matrix or cross product.
+        # We use a simple, CasADi-friendly placeholder force for initial stability:
+        L_x = ca.if_else(ca.fabs(V_reg) < 1e-3, 0.0, L_mag * ca.sin(phi) * e_v[1] / V_reg)
+        L_y = ca.if_else(ca.fabs(V_reg) < 1e-3, 0.0, L_mag * -ca.sin(phi) * e_v[0] / V_reg)
+        
+        L_z_pitch = L_mag * ca.cos(phi) * ca.cos(alpha) # Main lift component
+        
+        L_vec = ca.vertcat(L_x, L_y, L_z_pitch)
+        
+        # --- 4. Total Force and Dynamics (F = ma) ---
+        G_vec = ca.vertcat(0.0, 0.0, -self.m * self.g)
+        
+        # Total Force: Lift + Drag + Gravity
         F_total = L_vec + D_vec + G_vec
         
-        x_dot = ca.vertcat(V_ground_vec, F_total / m)
-        
-        return x_dot
+        # Acceleration
+        a_vec = F_total / self.m
 
-    def _setup_optimization_problem(self):
+        # --- Final System Dynamics (X_dot = f(X, U, P)) ---
+        X_dot = ca.vertcat(V_ground, a_vec)
         
-        # --- 1. Setup Optimization Variables ---
-        X = ca.SX.sym('X', 6, self.N + 1)  # State trajectory
-        U = ca.SX.sym('U', 2, self.N)      # Control trajectory
-        P = ca.SX.sym('P', 6 + 3)          # Parameters: [X0 (6), Thermal Params (3)]
+        # Continuous-time function
+        f = ca.Function('f', [X, U, W_atm_casadi], [X_dot])
         
-        # --- 2. Cost Function and Constraints ---
-        obj = 0  # Objective function
-        g = []   # Constraints (list of expressions that must be zero)
+        # Discrete-time map (Runge-Kutta 4)
+        M = 4 # RK4 steps
+        DT_RK4 = self.DT / M
+        X_k = X
+        for _ in range(M):
+            k1 = f(X_k, U, W_atm_casadi)
+            k2 = f(X_k + DT_RK4/2 * k1, U, W_atm_casadi)
+            k3 = f(X_k + DT_RK4/2 * k2, U, W_atm_casadi)
+            k4 = f(X_k + DT_RK4 * k3, U, W_atm_casadi)
+            X_k = X_k + DT_RK4/6 * (k1 + 2*k2 + 2*k3 + k4)
         
-        Q = ca.diag(self.config['MPC']['Q_diag'])
-        R = ca.diag(self.config['MPC']['R_diag'])
+        # Discrete-time dynamics map
+        F_map = ca.Function('F_map', [X, U, W_atm_casadi], [X_k], 
+                            ['x_in', 'u_in', 'p_in'], ['x_next'])
+
+        return NX, NU, F_map
+
+    def _setup_solver(self):
+        """Sets up the CasADi optimization problem (NLP)."""
         
-        # Initial state constraint
-        g.append(X[:, 0] - P[0:6])
+        NX, NU, F_map = self._setup_dynamics()
         
-        # --- 3. Runge-Kutta 4 Integration ---
+        # --- 1. NLP Setup ---
+        opti = ca.Opti()
+        
+        # Decision Variables (Control trajectory U)
+        U = opti.variable(NU, self.N) # Control inputs over horizon
+        
+        # State trajectory (for continuity constraints)
+        X = opti.variable(NX, self.N + 1)
+        
+        # Parameters (P): Current state, Thermal Target, Wind
+        P = opti.parameter(NX + 3) 
+        X_current = P[:NX]
+        Thermal_target = P[NX:] # [Target_X, Target_Y, Thermal_Radius]
+
+        # --- 2. Initial Condition Constraint ---
+        # The first state must match the current system state
+        opti.subject_to(X[:, 0] == X_current)
+        
+        # --- 3. Dynamic Constraints (Equality Constraints) ---
+        # Apply the dynamics over the horizon
         for k in range(self.N):
-            x_k = X[:, k]
-            u_k = U[:, k]
+            # NOTE: For simplicity, we assume zero wind in the prediction horizon. 
+            # In a full project, W_atm would also be a parameter or variable.
+            # Here, we pass a zero wind vector [0, 0, 0] for prediction.
+            opti.subject_to(X[:, k+1] == F_map(X[:, k], U[:, k], ca.vertcat(0, 0, 0)))
             
-            # Objective Contribution (Target is thermal center at high altitude)
-            X_target = ca.vertcat(P[6], P[7], 500.0, 0.0, 0.0, 0.0) 
-            obj += ca.mtimes([(x_k - X_target).T, Q, (x_k - X_target)])
-            obj += ca.mtimes([u_k.T, R, u_k])
+        # --- 4. Bounds and Constraints (Inequality Constraints) ---
+        
+        # Control Bounds:
+        # Bank Angle (phi): +/- 45 degrees
+        opti.subject_to(opti.bounded(-ca.pi/4, U[0, :], ca.pi/4)) 
+        # Effective Pitch (alpha): Lift-generating range (-5 to +10 degrees)
+        opti.subject_to(opti.bounded(-ca.deg(5), U[1, :], ca.deg(10)))
 
-            # Dynamics (RK4)
-            k1 = self._get_glider_dynamics(x_k, u_k, P[6:9])
-            k2 = self._get_glider_dynamics(x_k + self.DT / 2 * k1, u_k, P[6:9])
-            k3 = self._get_glider_dynamics(x_k + self.DT / 2 * k2, u_k, P[6:9])
-            k4 = self._get_glider_dynamics(x_k + self.DT * k3, u_k, P[6:9])
-            X_next = x_k + self.DT / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        # State Bounds:
+        # Altitude Constraint (z must be > MIN_ALTITUDE)
+        opti.subject_to(X[2, :] >= self.ALT_MIN) 
+        
+        # Velocity Bounds (Simple safe velocity range, e.g., 5 to 30 m/s)
+        opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 >= 5.0**2)
+        opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 <= 30.0**2)
+        
+        # --- 5. Objective Function (Minimize Energy and Maximize Lift/Target) ---
+        J = 0 
+        
+        for k in range(self.N):
+            # Minimize Control Effort (Smoothness)
+            J += ca.mtimes([U[:, k].T, self.R_u, U[:, k]]) 
+
+            # Primary Objective: Maximize altitude
+            J += -100 * X[2, k+1]
             
-            g.append(X[:, k+1] - X_next)
-            
-        # --- Terminal Cost (Last State) ---
-        X_target_N = ca.vertcat(P[6], P[7], 500.0, 0.0, 0.0, 0.0) 
-        obj += ca.mtimes([(X[:, self.N] - X_target_N).T, Q, (X[:, self.N] - X_target_N)])
+            # Secondary Objective: Navigate towards the thermal (Minimize horizontal distance squared)
+            dist_sq = (X[0, k+1] - Thermal_target[0])**2 + (X[1, k+1] - Thermal_target[1])**2
+            # Use a dead-band or soft approach: minimize distance only outside the radius
+            # This is hard to model with soft logic in IPOPT, so we use distance squared as a proxy
+            J += 0.01 * dist_sq 
 
-
-        # --- 4. Optimization Setup ---
-        nlp = {'f': obj, 'x': ca.vertcat(ca.vec(X), ca.vec(U)), 'p': P, 'g': ca.vertcat(*g)}
-
-        # --- 5. Solver Options (CRITICAL Tunning) ---
+        opti.minimize(J)
+        
+        # --- 6. Solver Options and Compilation ---
         opts = {
             'ipopt': {
-                'tol': 1e-4,              
-                'max_iter': 500,          
-                'linear_solver': 'mumps', 
-                'print_level': 3,         # Verbose output for debugging
-                'acceptable_iter': 1,     
+                'max_iter': 1000, 
+                'print_level': 0, 
+                'acceptable_tol': 1e-6, 
+                'acceptable_obj_change_tol': 1e-6
             },
             'print_time': False,
         }
-
-        # --- 6. Create Solver ---
-        solver = ca.nlpsol('solver', 'ipopt', nlp, opts)
+        opti.solver('ipopt', opts)
         
-        # --- 7. Bounds (lbx, ubx, lbu, ubu, lbg, ubg) ---
-        # Note: Bounds are stored as instance variables for reuse
-        self.lbx = np.zeros(6 * (self.N + 1) + 2 * self.N)
-        self.ubx = np.zeros(6 * (self.N + 1) + 2 * self.N)
-        self.lbg = np.zeros(6 * (self.N + 1))
-        self.ubg = np.zeros(6 * (self.N + 1))
-
-        # State Bounds
-        x_min, x_max = -5000.0, 5000.0
-        y_min, y_max = -5000.0, 5000.0
-        z_min, z_max = 5.0, 1000.0       
-        v_min = self.CONSTRAINTS['MIN_AIRSPEED'] 
-        v_max = 50.0
-
-        for k in range(self.N + 1):
-            idx = k * 6
-            self.lbx[idx:idx+6] = [x_min, y_min, z_min, v_min, v_min, -v_max]
-            self.ubx[idx:idx+6] = [x_max, y_max, z_max, v_max, v_max, v_max]
+        # Store the optimization problem structure
+        self.opti = opti
+        self.X = X
+        self.U = U
+        self.P = P
         
-        # Control Bounds (rad)
-        max_phi = np.deg2rad(self.CONSTRAINTS['MAX_BANK_DEG'])
-        max_alpha = np.deg2rad(self.CONSTRAINTS['MAX_PITCH_DEG'])
-
-        for k in range(self.N):
-            u_idx = 6 * (self.N + 1) + k * 2
-            self.lbx[u_idx:u_idx+2] = [-max_phi, -max_alpha]
-            self.ubx[u_idx:u_idx+2] = [max_phi, max_alpha]
-        
-        return solver
+        return opti.to_function('solver', [P], [U])
 
     def compute_control(self, current_state, thermal_center, thermal_radius):
         """
-        Computes the optimal control input (phi, alpha) for the current state.
+        Computes the next optimal control input based on the current state.
         """
         
-        # --- 1. Parameter Vector P (X0 and Thermal Params) ---
-        thermal_params = np.array([thermal_center[0], thermal_center[1], thermal_radius])
-        P_val = ca.vertcat(current_state, thermal_params)
+        # Set parameters (P)
+        p_val = np.hstack((current_state, thermal_center, thermal_radius)).flatten()
+        self.opti.set_value(self.P, p_val)
         
-        # --- 2. Initial Guess (Warm-Start Fix) ---
-        if self.X_opt is None:
-            # Cold Start
-            X_guess = np.tile(current_state, (self.N + 1, 1)).T
-            U_guess = np.zeros((2, self.N))
+        # Warm start (re-use previous solution as initial guess)
+        if self.U_prev is not None:
+             self.opti.set_initial(self.U, self.U_prev)
+             
+        # Optional: Set an initial state trajectory guess by simple integration
+        if self.X_prev is not None:
+            self.opti.set_initial(self.X, self.X_prev)
         else:
-            # Warm Start: Shift previous solution forward
-            X_guess = self.X_opt
-            U_guess = self.U_opt
+             self.opti.set_initial(self.X, np.tile(current_state, (self.N + 1, 1)).T)
+        
+        # --- Solve NLP ---
+        try:
+            sol = self.opti.solve()
+            u_star = sol.value(self.U)
+            x_star = sol.value(self.X)
             
-        x0_guess = ca.vertcat(ca.vec(X_guess), ca.vec(U_guess))
+            # Update warm start for next iteration
+            self.U_prev = np.hstack((u_star[:, 1:], u_star[:, -1:])) # Shift U, repeat last column
+            self.X_prev = np.hstack((x_star[:, 1:], x_star[:, -1:])) # Shift X, repeat last column
 
-        # --- 3. Solve NLP ---
-        sol = self.solver(
-            x0=x0_guess,
-            lbx=self.lbx,
-            ubx=self.ubx,
-            lbg=self.lbg,
-            ubg=self.ubg,
-            p=P_val
-        )
-        
-        # --- 4. Extract Solution ---
-        x_opt = sol['x'].full().flatten()
-        
-        # Extract the state and control trajectories for warm-start in next step
-        X_opt_next = np.reshape(x_opt[0:6 * (self.N + 1)], (6, self.N + 1))
-        U_opt_next = np.reshape(x_opt[6 * (self.N + 1):], (2, self.N))
-        
-        # Store for Warm-Start (Shift forward)
-        self.X_opt = np.hstack((X_opt_next[:, 1:], np.expand_dims(X_opt_next[:, -1], axis=1)))
-        self.U_opt = np.hstack((U_opt_next[:, 1:], np.expand_dims(U_opt_next[:, -1], axis=1)))
+            return u_star[:, 0] # Return the first control input
+            
+        except Exception as e:
+            # If solver fails (e.g., local infeasibility, NaN)
+            print("\nWARNING: IPOPT failed to converge. Returning previous control input.")
+            print(f"Error: {e}")
+            
+            # Reset warm start to simple guess to prevent repeated NaN errors
+            self.U_prev = np.zeros((2, self.N))
+            self.X_prev = None
+            
+            # For this critical failure, we return a safe-glide command (e.g., 0 bank, 0 pitch)
+            return np.array([0.0, 0.0]) 
 
-        # Return the first control input
-        U_next = U_opt_next[:, 0]
-        return U_next
