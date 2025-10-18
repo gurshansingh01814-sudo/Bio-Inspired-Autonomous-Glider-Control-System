@@ -2,7 +2,7 @@ import numpy as np
 import yaml
 import sys
 import os
-from numpy.linalg import norm # Import norm specifically for cleaner code
+from numpy.linalg import norm 
 
 # Helper: Converts degrees to radians for internal calculations
 def deg_to_rad(deg):
@@ -31,7 +31,10 @@ class GliderDynamics:
         env_params = self.config.get('ATMOSPHERE', {})
         self.g = env_params.get('gravity', 9.81)       # Gravitational acceleration
         self.rho = env_params.get('rho_air', 1.225)    # Air density
-        self.EPSILON_AIRSPEED = 1e-6                   # Regularization for division by zero
+        
+        # CRITICAL FIX: Define EPSILON_LIFT here (matching the symbolic MPC stability fix)
+        self.EPSILON_AIRSPEED = 1e-6                   # Regularization for division by zero (air speed)
+        self.EPSILON_LIFT = 1e-4                       # Robust regularization for lift vector calculation
 
     def _load_config(self, path):
         """Loads configuration from a YAML file. Simplified to a dictionary."""
@@ -89,14 +92,11 @@ class GliderDynamics:
             # Project Z-axis onto the plane perpendicular to e_v
             e_z = np.array([0.0, 0.0, 1.0])
             e_L_raw = e_z - np.dot(e_z, e_v) * e_v 
-             
-            EPSILON_LIFT = 1e-4
             
-            # Ensure lift vector direction is defined
+            # FIX: Use the defined self.EPSILON_LIFT for robust normalization
             L_vert_unit = e_L_raw / (norm(e_L_raw) + self.EPSILON_LIFT)
             
             # The cross-product gives the vector perpendicular to both L_vert_unit and e_v
-            # This is the 'horizontal' or 'side' vector, used for banking
             L_side_unit = np.cross(e_v, L_vert_unit) 
 
             # Lift Vector: Components are rotated by the bank angle (phi)
