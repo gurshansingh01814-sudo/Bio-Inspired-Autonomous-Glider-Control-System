@@ -32,8 +32,10 @@ class MPCController:
         self.K = ca.MX(glider_params.get('K', 0.04))
         self.g = ca.MX(env_params.get('gravity', 9.81))
         self.rho = ca.MX(env_params.get('rho_air', 1.225))
-        self.EPSILON_AIRSPEED = 1e-6 # Used for V_reg denominator
-        self.EPSILON_LIFT = 1e-4     # Robust regularization for lift vector
+        
+        # CRITICAL NUMERICAL FIX: Increased epsilon for stability
+        self.EPSILON_AIRSPEED = 1e-4 # Used for V_reg denominator
+        self.EPSILON_LIFT = 1e-3     # Robust regularization for lift vector
 
         # Problem Setup (State and Control Dimensions)
         self.NX = 6 # [x, y, z, vx, vy, vz]
@@ -65,7 +67,8 @@ class MPCController:
         # Air velocity calculation
         V_air_vec = V_ground - W_in
         V_air_mag = ca.norm_2(V_air_vec)
-        V_reg = ca.sqrt(V_air_mag**2 + self.EPSILON_AIRSPEED)
+        # Use robust V_reg
+        V_reg = ca.sqrt(V_air_mag**2 + self.EPSILON_AIRSPEED**2) 
         e_v = V_air_vec / V_reg # Unit vector in direction of air velocity
         
         # 1. Drag Force (Fd)
@@ -82,8 +85,11 @@ class MPCController:
         dot_product = ca.dot(e_z, e_v)
         e_L_raw = e_z - dot_product * e_v 
         
-        # CRITICAL FIX: Robust regularization for lift vector calculation
-        L_raw_mag_reg = ca.norm_2(e_L_raw) + self.EPSILON_LIFT
+        # CRITICAL FIX: Numerically safer unit vector calculation for Lift
+        # Uses norm-squared regularization for smoother gradient near zero.
+        L_raw_mag_sq_reg = ca.sumsqr(e_L_raw) + self.EPSILON_LIFT**2
+        L_raw_mag_reg = ca.sqrt(L_raw_mag_sq_reg)
+
         L_vert_unit = e_L_raw / L_raw_mag_reg
         
         L_side_unit = ca.cross(e_v, L_vert_unit) 
@@ -115,7 +121,7 @@ class MPCController:
         # Parameters
         P_init = opti.parameter(self.NX, 1)
         P_target = opti.parameter(2, 1) 
-        P_Wz = opti.parameter(1, self.N)  # Thermal lift (Wz) over the horizon
+        P_Wz = opti.parameter(1, self.N) # Thermal lift (Wz) over the horizon
         
         # Objective Function
         J = 0 
@@ -166,8 +172,7 @@ class MPCController:
         opti.subject_to(V_air_sq >= V_MIN**2)
         opti.subject_to(ca.sqrt(V_air_sq) <= V_MAX)
         
-        # --- CRITICAL FIX: Numerical Warm Start (DM) for MX variables ---
-        # This uses the set_initial(MX, DM) prototype, which is robust.
+        # --- Warm Start (Numerical DM for MX variables) ---
         
         # 1. State Guess (X_guess): Zero Matrix (DM)
         X_guess = ca.DM.zeros(self.NX, self.N + 1)
