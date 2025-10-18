@@ -114,8 +114,8 @@ class MPCController:
         
         # Parameters
         P_init = opti.parameter(self.NX, 1)
-        P_target = opti.parameter(2, 1)        
-        P_Wz = opti.parameter(1, self.N)       # Thermal lift (Wz) over the horizon
+        P_target = opti.parameter(2, 1) 
+        P_Wz = opti.parameter(1, self.N)  # Thermal lift (Wz) over the horizon
         
         # Objective Function
         J = 0 
