@@ -140,7 +140,7 @@ class MPCController:
         # Decision Variables
         U = opti.variable(NU, self.N)       
         X = opti.variable(NX, self.N + 1)   
-        S = opti.variable(1, self.N + 1) # Slack variable
+        S = opti.variable(1, self.N + 1) # Slack variable (for soft altitude constraint)
         opti.subject_to(S >= 0)
         
         # Parameters
@@ -178,15 +178,14 @@ class MPCController:
             # Minimize Control Effort 
             J += ca.mtimes([U[:, k].T, self.R_u, U[:, k]]) 
 
-            # Primary Objective: Maximize altitude
-            # CRITICAL FIX 2: Reduce altitude weight further to ease convergence
-            J += -300 * X[2, k+1] # Reduced from -400 to -300
+            # Primary Objective: Maximize altitude (Tuned for stability)
+            J += -300 * X[2, k+1] 
             
             # Secondary Objective: Navigate towards the thermal 
             dist_sq = (X[0, k+1] - Thermal_target[0])**2 + (X[1, k+1] - Thermal_target[1])**2
             J += 0.01 * dist_sq 
         
-        # Tertiary Objective: Penalize Slack Variable Use (Keep high penalty)
+        # Tertiary Objective: Penalize Slack Variable Use (High penalty)
         J += 1000 * ca.sumsqr(S) 
 
         opti.minimize(J)
@@ -194,14 +193,13 @@ class MPCController:
         # --- 6. Solver Options and Compilation ---
         opts = {
             'ipopt': {
+                # Keep critical max_iter change
                 'max_iter': 3000, 
                 'print_level': 0, 
                 'acceptable_tol': 1e-6, 
                 'acceptable_obj_change_tol': 1e-6,
-                # CRITICAL FIX 1: Allow larger steps to speed up convergence
-                'max_cpu_time': 0.1, # Add a small time limit if max_iter fails (IPOPT default)
-                'alpha_max_primal': 100, # Allow large primal steps (default is 1e8, but we make it explicit)
-                'alpha_max_dual': 100, # Allow large dual steps
+                # REMOVED: 'alpha_max_primal' and 'alpha_max_dual' to fix the RuntimeError
+                'max_cpu_time': 0.1, # Allow up to 0.1 seconds per solve
             },
             'print_time': False,
         }
@@ -228,7 +226,7 @@ class MPCController:
         if self.U_prev is not None:
              self.opti.set_initial(self.U, self.U_prev)
              
-        # Optional: Set an initial state trajectory guess by simple integration
+        # Set an initial state trajectory guess
         if self.X_prev is not None:
             self.opti.set_initial(self.X, self.X_prev)
         else:
