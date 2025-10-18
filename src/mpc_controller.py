@@ -178,7 +178,7 @@ class MPCController:
             # Minimize Control Effort 
             J += ca.mtimes([U[:, k].T, self.R_u, U[:, k]]) 
 
-            # Primary Objective: Maximize altitude (Tuned for stability)
+            # Primary Objective: Maximize altitude 
             J += -300 * X[2, k+1] 
             
             # Secondary Objective: Navigate towards the thermal 
@@ -193,13 +193,12 @@ class MPCController:
         # --- 6. Solver Options and Compilation ---
         opts = {
             'ipopt': {
-                # Keep critical max_iter change
                 'max_iter': 3000, 
                 'print_level': 0, 
                 'acceptable_tol': 1e-6, 
                 'acceptable_obj_change_tol': 1e-6,
-                # REMOVED: 'alpha_max_primal' and 'alpha_max_dual' to fix the RuntimeError
-                'max_cpu_time': 0.1, # Allow up to 0.1 seconds per solve
+                # CRITICAL FIX: Increase max CPU time to give solver more time to converge
+                'max_cpu_time': 0.5, # Increased from 0.1 to 0.5 seconds
             },
             'print_time': False,
         }
@@ -249,7 +248,7 @@ class MPCController:
             return u_star[:, 0] # Return the first control input
             
         except Exception as e:
-            # If solver fails (e.g., local infeasibility, max iter)
+            # If solver fails (e.g., local infeasibility, max iter, max CPU time)
             print("\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
             print(f"Error: {e}")
             
