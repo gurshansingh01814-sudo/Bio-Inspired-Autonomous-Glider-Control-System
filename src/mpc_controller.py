@@ -146,7 +146,7 @@ class MPCController:
             # 3. Control Effort / Smoothness
             J += W_SMOOTH * ca.sumsqr(U[:, k] - U[:, k-1])
             # 4. Airspeed Regulation Cost
-            J += W_AIRSPEED * V_mag[k]
+            J += W_AIRSPEED * ca.sqrt(V_air_sq)[k]
             
             # 4. Continuity Constraint (Dynamic Model)
             X_dot = self._glider_dynamics(X[:, k], U[:, k], P_Wz[0, k])
@@ -172,23 +172,19 @@ class MPCController:
         V_MIN = 6.0 
         V_MAX = 50.0 
         V_air_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
-        V_mag = ca.sqrt(V_air_sq) # Airspeed magnitude
-        # print(V_mag)
         
         # 1. Minimum and Maximum Airspeed constraint
-        opti.subject_to(V_air_sq >= V_MIN**2) # Enforce minimum velocity squared
-        opti.subject_to(V_mag <= V_MAX)
+        opti.subject_to(V_air_sq >= V_MIN**2- S_alt) # Enforce minimum velocity squared
+        opti.subject_to(ca.sqrt(V_air_sq)<= V_MAX)
         
         # 2. CRITICAL FIX: Flight Path Angle Constraint for numerical stability (NO DIVISION)
-        # This constraint is rewritten from: -sin(gamma_max) <= vz / V_mag <= sin(gamma_max)
-        # To the numerically safe form: |vz| <= V_mag * sin(gamma_max)
         MAX_GAMMA_RAD = math.radians(60.0) 
         MAX_GAMMA_SIN = ca.sin(MAX_GAMMA_RAD)
         
         # Upper bound: vz <= V_mag * sin(gamma_max)
-        opti.subject_to(X[5, :] <= V_mag * MAX_GAMMA_SIN)
+        opti.subject_to(X[5, :] <= ca.sqrt(V_air_sq)* MAX_GAMMA_SIN)
         # Lower bound: vz >= -V_mag * sin(gamma_max)
-        opti.subject_to(X[5, :] >= -V_mag * MAX_GAMMA_SIN)
+        opti.subject_to(X[5, :] >= -ca.sqrt(V_air_sq) * MAX_GAMMA_SIN)
         # This prevents NaN generation from division by small numbers near V_mag, 
         # as V_mag is guaranteed to be >= V_MIN.
         
