@@ -30,6 +30,7 @@ class MPCController:
 
         self.solver = self._setup_solver()
         
+        # Warm start storage
         self.U_prev = np.zeros((2, self.N))
         self.X_prev = None 
         self.last_successful_u = np.array([0.0, 0.0])
@@ -103,7 +104,7 @@ class MPCController:
         U = opti.variable(NU, self.N)       
         X = opti.variable(NX, self.N + 1)   
         S_alt = opti.variable(1, self.N + 1) # Altitude Slack
-        S_vel = opti.variable(1, self.N + 1) # CRITICAL: Airspeed Slack
+        S_vel = opti.variable(1, self.N + 1) # Airspeed Slack
         opti.subject_to(S_alt >= 0)
         opti.subject_to(S_vel >= 0)
         
@@ -114,41 +115,40 @@ class MPCController:
         # --- 2. Constraints ---
         opti.subject_to(X[:, 0] == X_current)
         for k in range(self.N):
+            # Enforce non-linear dynamics
             opti.subject_to(X[:, k+1] == F_map(X[:, k], U[:, k], ca.vertcat(0, 0, 0)))
             
         DEG_TO_RAD = ca.pi / 180.0
         
         # Control Bounds:
-        opti.subject_to(opti.bounded(-45.0 * DEG_TO_RAD, U[0, :], 45.0 * DEG_TO_RAD)) # Bank Angle (phi)
-        opti.subject_to(opti.bounded(-5.0 * DEG_TO_RAD, U[1, :], 15.0 * DEG_TO_RAD))  # Effective Pitch (alpha)
+        opti.subject_to(opti.bounded(-45.0 * DEG_TO_RAD, U[0, :], 45.0 * DEG_TO_RAD)) # Bank Angle
+        opti.subject_to(opti.bounded(-5.0 * DEG_TO_RAD, U[1, :], 15.0 * DEG_TO_RAD))  # Effective Pitch
 
-        # State Bounds:
+        # State Bounds (Soft Altitude and Soft Min Velocity for reliability):
         for k in range(self.N + 1):
-             opti.subject_to(X[2, k] + S_alt[0, k] >= self.ALT_MIN) # Soft Altitude
+             opti.subject_to(X[2, k] + S_alt[0, k] >= self.ALT_MIN) 
         
-        # CRITICAL FIX 1: Soft Minimum Velocity Constraint
         V_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
-        opti.subject_to(V_sq + S_vel[0, :] >= 4.5**2) 
-        
-        # Hard Maximum Velocity Constraint (not causing infeasibility, keep hard)
-        opti.subject_to(V_sq <= 30.0**2) 
+        opti.subject_to(V_sq + S_vel[0, :] >= 4.5**2) # Soft Minimum Velocity
+        opti.subject_to(V_sq <= 30.0**2) # Hard Maximum Velocity
         
         # --- 3. Objective Function ---
         J = 0 
         
         for k in range(self.N):
             J += ca.mtimes([U[:, k].T, self.R_u, U[:, k]]) 
-            J += -300 * X[2, k+1] 
+            J += -300 * X[2, k+1] # Maximize altitude
+            
+            # CRITICAL FIX 3: Increase distance weight for stronger gradient
             dist_sq = (X[0, k+1] - Thermal_target[0])**2 + (X[1, k+1] - Thermal_target[1])**2
-            J += 0.01 * dist_sq 
+            J += 1.0 * dist_sq # Push aggressively toward the thermal center
         
-        # CRITICAL FIX 2: Penalize both slack variables
         J += 100 * ca.sumsqr(S_alt) 
-        J += 500 * ca.sumsqr(S_vel) # High penalty to keep airspeed constraint active
+        J += 500 * ca.sumsqr(S_vel) 
 
         opti.minimize(J)
         
-        # --- 4. Solver Options (Maintained for maximum stability) ---
+        # --- 4. Solver Options ---
         opts = {
             'ipopt': {
                 'max_iter': 3000, 
@@ -168,7 +168,6 @@ class MPCController:
         
         return opti.to_function('solver', [P], [U])
 
-    # ... compute_control method (kept the same for warm start logic) ...
     def compute_control(self, current_state, thermal_center, thermal_radius):
         """
         Computes the next optimal control input based on the current state.
@@ -177,16 +176,17 @@ class MPCController:
         p_val = np.hstack((current_state, thermal_center, thermal_radius)).flatten()
         self.opti.set_value(self.P, p_val)
         
-        # Warm Start
+        # Warm Start initialization
         if self.U_prev is not None:
              self.opti.set_initial(self.U, self.U_prev)
              
         if self.X_prev is not None:
             self.opti.set_initial(self.X, self.X_prev)
         else:
+             # Cold Start (only run on first iteration or total failure)
              initial_x_guess = np.tile(current_state, (self.N + 1, 1)).T
              self.opti.set_initial(self.X, initial_x_guess)
-             self.X_prev = initial_x_guess 
+             # Note: self.X_prev is NOT initialized here, it gets initialized after the first successful solve.
         
         # --- Solve NLP ---
         try:
@@ -194,7 +194,7 @@ class MPCController:
             u_star = sol.value(self.U)
             x_star = sol.value(self.X)
             
-            # Update warm start 
+            # Update warm start (Shift previous solution)
             self.U_prev = np.hstack((u_star[:, 1:], u_star[:, -1:])) 
             self.X_prev = np.hstack((x_star[:, 1:], x_star[:, -1:])) 
             
@@ -203,11 +203,12 @@ class MPCController:
             return u_star[:, 0] 
             
         except Exception as e:
-            # If solver fails
+            # If solver fails (Infeasible or CPU Time Exceeded)
             print("\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
             print(f"Error: {e}")
             
-            # This handles the Max_CpuTime_Exceeded failure gracefully
-            # and prevents Infeasible_Problem_Detected from blocking execution
-            self.X_prev = None 
+            # CRITICAL FIX 4: DO NOT reset self.X_prev or self.U_prev on failure!
+            # The *stale* warm start is still better than a cold start guess.
+            # We simply rely on the warm start from the previous successful iteration.
+            
             return self.last_successful_u
