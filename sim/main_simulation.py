@@ -14,7 +14,6 @@ try:
     from src.atmospheric_model import AtmosphericModel as Thermal 
 except ImportError as e:
     print(f"FATAL: Missing a required class import: {e}")
-    # If the above fails, you might need to adjust your system's Python path or the import style
     print("If imports fail, ensure you are running the script using: python -m sim.main_simulation")
     sys.exit(1)
 
@@ -22,18 +21,20 @@ except ImportError as e:
 class GliderControlSystem:
     # --- Configuration Paths ---
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    # FIX: Corrected path from 'config' to 'data'
+    # Path is now correctly set to 'data'
     CONFIG_PATH = os.path.join(BASE_DIR, 'data', 'glider_config.yaml') 
 
     def __init__(self):
         print(f"Attempting to load config from: {self.CONFIG_PATH}")
-        self.config = self._load_config(self.CONFIG_PATH)
-
-        # --- Initialization of Components (CRITICAL FOR SELF.MPC) ---
-        self.glider = GliderDynamics(self.config)
-        self.thermal = Thermal(self.config)
         
-        # This line must execute successfully to create self.mpc
+        # --- NOTE: self.config is only loaded here for printing/debug purposes in this class ---
+        # The components (GliderDynamics, Thermal, MPCController) will load the config internally.
+        self.config = self._load_config(self.CONFIG_PATH) 
+
+        # --- Initialization of Components (CRITICAL FIX APPLIED HERE) ---
+        # FIX: Pass the file path string (self.CONFIG_PATH) instead of the dict (self.config)
+        self.glider = GliderDynamics(self.CONFIG_PATH) 
+        self.thermal = Thermal(self.CONFIG_PATH)
         self.mpc = MPCController(self.CONFIG_PATH) 
         
         # Data logging initialization
@@ -43,7 +44,7 @@ class GliderControlSystem:
         print("System initialized successfully.")
 
     def _load_config(self, path):
-        """Loads configuration from a YAML file."""
+        """Loads configuration from a YAML file. Used only for GliderControlSystem's internal reference."""
         try:
             with open(path, 'r') as f:
                 return yaml.safe_load(f)
