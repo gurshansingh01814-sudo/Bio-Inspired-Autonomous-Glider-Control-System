@@ -33,7 +33,7 @@ class MPCController:
         self.g = ca.MX(env_params.get('gravity', 9.81))
         self.rho = ca.MX(env_params.get('rho_air', 1.225))
         self.EPSILON_AIRSPEED = 1e-6 # Used for V_reg denominator
-        self.EPSILON_LIFT = 1e-4     # CRITICAL FIX: Robust regularization for lift vector
+        self.EPSILON_LIFT = 1e-4     # Robust regularization for lift vector
 
         # Problem Setup (State and Control Dimensions)
         self.NX = 6 # [x, y, z, vx, vy, vz]
@@ -121,10 +121,10 @@ class MPCController:
         J = 0 
         
         # Define Tuning Weights
-        W_CLIMB = 1.0     # Weight for maximizing vertical speed (Crucial for bio-inspiration)
-        W_SMOOTH = 0.01   # Weight for control smoothness/effort
-        W_DIST = 0.05     # Weight for distance to thermal center (when not fully inside)
-        W_SLACK = 10000.0 # Massive penalty on altitude violation
+        W_CLIMB = 1.0     
+        W_SMOOTH = 0.01   
+        W_DIST = 0.05     
+        W_SLACK = 10000.0 
 
         # Cost Loop
         for k in range(self.N):
@@ -165,6 +165,17 @@ class MPCController:
         V_air_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
         opti.subject_to(V_air_sq >= V_MIN**2)
         opti.subject_to(ca.sqrt(V_air_sq) <= V_MAX)
+        
+        # --- CRITICAL FIX: Warm Start / Initial Guess ---
+        # Provides a safe, feasible starting point (straight glide at min CL)
+        # Note: P_init is a CasADi parameter, so we use its .full() representation for initialization
+        X_guess = P_init.full() @ ca.DM.ones(1, self.N + 1)
+        U_guess = ca.vertcat(ca.DM(self.CL_MIN), ca.DM(0.0)) @ ca.DM.ones(1, self.N)
+        
+        opti.set_initial(X, X_guess)
+        opti.set_initial(U, U_guess)
+        opti.set_initial(S_alt, 0.0) 
+        # ------------------------------------------------
 
         opti.minimize(J)
         
@@ -192,7 +203,7 @@ class MPCController:
             return U_optimal[:, 0] 
         
         except Exception as e:
-            # Fallback to a feasible, minimum-drag glide command
-            # The simulator will use this if the MPC problem fails.
-            # CL_MIN = 0.2
+            # Fallback to a feasible, minimum-drag glide command (CL_MIN = 0.2)
+            # This is only used if the solver explicitly raises an exception.
+            # print(f"\nWARNING: IPOPT failed to converge: {e}. Returning safe glide command.")
             return np.array([self.CL_MIN, 0.0])
