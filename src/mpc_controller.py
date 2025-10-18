@@ -197,8 +197,8 @@ class MPCController:
                 'print_level': 0, 
                 'acceptable_tol': 1e-6, 
                 'acceptable_obj_change_tol': 1e-6,
-                # CRITICAL FIX: Increase max CPU time to give solver more time to converge
-                'max_cpu_time': 0.5, # Increased from 0.1 to 0.5 seconds
+                # CRITICAL FIX: Increase max CPU time further (near DT limit)
+                'max_cpu_time': 0.9, # Increased from 0.5 to 0.9 seconds (DT=1.0s)
             },
             'print_time': False,
         }
