@@ -26,9 +26,9 @@ class MPCController:
         self.CL = glider_params.get('CL', 0.8) # Constant Lift Coefficient
         
         mpc_params = self.config.get('MPC', {})
-        # Revert N to a smaller value for faster processing, since DT is larger
-        self.N = 10 # Set N=10 steps for a 20s horizon (10 * 2.0s = 20s)
-        self.DT = mpc_params.get('PREDICT_DT', 1.0) # Will load 2.0 from config
+        # CRITICAL FIX: Further reduce horizon N from 10 to 8
+        self.N = 8 
+        self.DT = mpc_params.get('PREDICT_DT', 1.0) # Should load 2.0 from config
         self.Q_x = np.diag(mpc_params.get('STATE_WEIGHTS', [10.0, 10.0, 1.0, 0.1, 0.1, 0.1]))
         self.R_u = np.diag(mpc_params.get('CONTROL_WEIGHTS', [0.1, 0.1]))
         self.ALT_MIN = mpc_params.get('MIN_ALTITUDE', 20.0)
@@ -196,10 +196,10 @@ class MPCController:
             'ipopt': {
                 'max_iter': 3000, 
                 'print_level': 0, 
-                'acceptable_tol': 1e-6, 
+                # CRITICAL FIX: Relax convergence tolerance to speed up the solve
+                'acceptable_tol': 1e-4, # Changed from 1e-6 to 1e-4
                 'acceptable_obj_change_tol': 1e-6,
-                # CRITICAL CHANGE: Max CPU time for the 2.0s time step
-                'max_cpu_time': 1.8, # Set to 90% of the new DT (2.0s)
+                'max_cpu_time': 1.8, 
             },
             'print_time': False,
         }
