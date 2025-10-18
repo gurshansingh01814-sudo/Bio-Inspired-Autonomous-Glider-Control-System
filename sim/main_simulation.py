@@ -5,6 +5,7 @@ import os
 
 # --- CRITICAL FIX IMPORTS ---
 # Corrected package imports
+# NOTE: Assumes __init__.py exists in 'src' folder
 from src.mpc_controller import MPCController
 from src.glider_dynamics import GliderDynamics
 from src.atmospheric_model import AtmosphericModel
@@ -45,7 +46,9 @@ class DataLogger:
         final_alt = self.log['z'][-1]
         
         # Calculate average thermal usage
-        avg_Wz = np.mean([w for w in self.log['Wz'] if w > 0]) # Only average positive uplift
+        # Use a safe calculation for mean if no positive uplift occurred
+        positive_Wz = [w for w in self.log['Wz'] if w > 0]
+        avg_Wz = np.mean(positive_Wz) if positive_Wz else 0.0
         
         print("\n" + "="*50)
         print("    GLIDER CONTROL SYSTEM SIMULATION COMPLETE")
@@ -53,20 +56,20 @@ class DataLogger:
         print(f"Total Flight Time: {final_time:.1f} seconds")
         print(f"Final Altitude (z): {final_alt:.2f} meters")
         print(f"Final Position (x, y): ({self.log['x'][-1]:.1f}, {self.log['y'][-1]:.1f}) meters")
-        print(f"Average Thermal Uplift: {avg_Wz:.2f} m/s")
+        print(f"Average Thermal Uplift (in thermal area): {avg_Wz:.2f} m/s")
         print("="*50 + "\n")
 
 # Function to find the absolute path of the project root
 def find_project_root():
-    """Locates the project root directory (Bio-Inspired-Autonomous-Glider-Control-System)."""
+    """Locates the project root directory."""
+    # This finds the directory containing 'sim' and 'src'
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    # Assuming 'sim' is directly under the project root
     return os.path.abspath(os.path.join(current_dir, os.pardir))
 
 
 class GliderControlSystem:
     def __init__(self, config_file_name='glider_config.yaml'):
-        # 1. Find Project Root
+        # 1. Find Project Root and Config Path
         self.PROJECT_ROOT = find_project_root()
         self.CONFIG_PATH = os.path.join(self.PROJECT_ROOT, 'data', config_file_name)
 
@@ -74,26 +77,29 @@ class GliderControlSystem:
         print(f"Attempting to load config from: {self.CONFIG_PATH}")
         sys.stdout.flush() 
 
-        # 2. Check for configuration file existence
+        # 2. Check for configuration file existence (Bulletproof Check)
         if not os.path.exists(self.CONFIG_PATH):
-             # CRITICAL check to prevent the 'str' error if the file isn't found
-             print("FATAL ERROR: Configuration file not found at expected path.")
+             print("\nFATAL ERROR: Configuration file not found at expected path.")
+             print(f"Path checked: {self.CONFIG_PATH}")
              print("Please ensure 'data/glider_config.yaml' exists.")
-             sys.exit(1) # Exit immediately before any component tries to load it incorrectly
+             sys.exit(1)
         
         # 3. Component Instantiation
-        # Components load config using the known, absolute path
+        # All components now load config using the known, absolute path
         self.dynamics = GliderDynamics(self.CONFIG_PATH)
         self.atmosphere = AtmosphericModel(self.CONFIG_PATH)
         self.mpc = MPCController(self.CONFIG_PATH)
 
-        # 4. Simulation Parameters (loaded from MPC controller's config, which is guaranteed to be a dict)
-        self.MAX_TIME = self.mpc.config.get('SIMULATION', {}).get('MAX_TIME', 120.0)
-        self.DT = self.mpc.config.get('SIMULATION', {}).get('DT', 1.0)
+        # 4. Simulation Parameters (load from MPC controller's config)
+        # We rely on the config being loaded properly in MPCController
+        config_data = self.mpc.config.get('SIMULATION', {}) 
+        self.MAX_TIME = config_data.get('MAX_TIME', 120.0)
+        self.DT = config_data.get('DT', 1.0)
         self.TOTAL_STEPS = int(self.MAX_TIME / self.DT)
 
-        # Initial State: [x, y, z, vx, vy, vz]
-        self.current_state = np.array([0.0, 0.0, 150.0, 15.0, 0.0, -1.0]) 
+        # 5. Initial State: [x, y, z, vx, vy, vz]
+        # Safer start conditions to give the MPC a chance to solve
+        self.current_state = np.array([0.0, 0.0, 200.0, 15.0, 0.0, 0.0]) 
 
         self.logger = DataLogger()
 
@@ -117,6 +123,7 @@ class GliderControlSystem:
             W_atm_z = W_atm[2]
 
             # --- 2. Compute Control (MPC) ---
+            # NOTE: Any CasADi errors will occur here
             current_control = self.mpc.compute_control(self.current_state, thermal_center, thermal_radius)
             
             # --- 3. Step Dynamics ---
@@ -144,15 +151,10 @@ class GliderControlSystem:
 
 
 if __name__ == '__main__':
-    # Add project root to path for execution from IDE/different directory
+    # Add project root to path for module execution safety
     sys.path.append(find_project_root())
     
     try:
-        # Check if the sim/main_simulation.py script is being run directly from the sim folder
-        # If so, we need to add the parent directory to the path so python can find the 'src' package.
-        if os.path.basename(os.getcwd()) == 'sim':
-            sys.path.append(os.path.abspath(os.path.join(os.getcwd(), os.pardir)))
-            
         system = GliderControlSystem()
         system.run()
         
