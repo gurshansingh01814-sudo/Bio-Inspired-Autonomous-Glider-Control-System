@@ -127,10 +127,10 @@ class MPCController:
         J = 0 
         
         # Define Tuning Weights
-        W_CLIMB = 1.0     
-        W_SMOOTH = 0.01   
-        W_DIST = 0.05     
-        W_SLACK = 10000.0 
+        W_CLIMB = 1.0        
+        W_SMOOTH = 0.01      
+        W_DIST = 1.0         # <--- INCREASED from 0.05 to 1.0
+        W_SLACK = 1000.0     # <--- DECREASED from 10000.0 to 1000.0
 
         # Cost Loop
         for k in range(self.N):
@@ -178,7 +178,13 @@ class MPCController:
         X_guess = ca.DM.zeros(self.NX, self.N + 1)
         
         # 2. Control Guess (U_guess): Fixed Feasible Values (DM)
-        U_safe = ca.DM([[self.CL_MIN], [0.0]]) # [CL_MIN, 0.0] as a column vector
+        
+        # === START CRITICAL WARM START FIX ===
+        MODERATE_BANK_RAD = math.radians(15.0) 
+        MODERATE_CL = 0.7 
+        U_safe = ca.DM([[MODERATE_CL], [MODERATE_BANK_RAD]]) # [CL, Phi] (0.7, 15 deg)
+        # === END CRITICAL WARM START FIX ===
+        
         U_guess = ca.repmat(U_safe, 1, self.N) # Tile the safe value across the horizon (results in a DM)
         
         opti.set_initial(X, X_guess) 
@@ -213,4 +219,5 @@ class MPCController:
         
         except Exception as e:
             # Fallback to a feasible, minimum-drag glide command (CL_MIN = 0.2)
+            # You can print the error here if needed, but keeping it silent avoids spamming the log.
             return np.array([self.CL_MIN, 0.0])
