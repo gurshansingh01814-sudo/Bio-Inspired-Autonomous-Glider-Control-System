@@ -6,7 +6,7 @@ SIMULATION:
 
 MPC:
   N: 20
-  DT: 1.0
+  DT: 2.0
   # State cost weights: [x, y, z, vx, vy, vz]
   Q_diag: [1000.0, 1000.0, 5000.0, 10.0, 10.0, 10.0] 
   # Control cost weights: [phi (bank), alpha (pitch)]
