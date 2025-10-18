@@ -1,0 +1,25 @@
+# Glider Control System Configuration
+
+SIMULATION:
+  MAX_TIME: 240.0
+  DT: 1.0
+
+MPC:
+  N: 20
+  DT: 1.0
+  # State cost weights: [x, y, z, vx, vy, vz]
+  Q_diag: [1000.0, 1000.0, 5000.0, 10.0, 10.0, 10.0] 
+  # Control cost weights: [phi (bank), alpha (pitch)]
+  R_diag: [0.1, 0.1]
+
+GLIDER:
+  mass: 700.0
+  S: 14.0
+  CD0: 0.015
+  K: 0.04
+  CL: 0.8
+
+CONSTRAINTS:
+  MIN_AIRSPEED: 10.0
+  MAX_BANK_DEG: 45.0
+  MAX_PITCH_DEG: 10.0
