@@ -1,76 +1,85 @@
 import numpy as np
-import math
+import yaml
+import os
+import sys
 
 class GliderDynamics:
     """
-    Simulates the non-linear dynamics of a glider.
-    Uses a standard lift, drag, and gravity model.
+    Implements the simplified glider dynamics model and loads parameters from config.
     """
-    def __init__(self, params):
+    def __init__(self, full_config_path):
+        
+        # --- Config Loading (Now Robust) ---
+        config = {}
+        try:
+            with open(full_config_path, 'r') as f:
+                config = yaml.safe_load(f)
+        except Exception as e:
+            # Since main_simulation checks file existence, this handles parsing error
+            print(f"FATAL: YAML parsing error in GliderDynamics: {e}")
+            sys.exit(1)
+
+        # --- Glider Parameters ---
+        # The core parameters dictionary is now GLIDER
+        params = config.get('GLIDER', {}) 
+        
+        # We are now calling .get() on the 'params' dictionary, not the full_config_path string!
         self.m = params.get('mass', 700.0)
+        self.S = params.get('S', 14.0)
+        self.CD0 = params.get('CD0', 0.015)
+        self.K = params.get('K', 0.04)
+        self.CL = params.get('CL', 0.8)
+        
+        # Gravity constant
         self.g = 9.81
-        self.rho = 1.225 # Air density (kg/m^3)
-        self.S = params.get('S', 14.0) # Wing area (m^2)
-        self.CD0 = params.get('CD0', 0.015) # Zero-lift drag coefficient
-        self.K = params.get('K', 0.04) # Induced drag factor (1 / (pi * e * AR))
-        self.CL = 0.8 # Constant Lift coefficient placeholder (A standard simplification)
-
-    def calculate_airspeed(self, state, wind_vector):
-        """Calculates the magnitude of the air velocity vector."""
-        # state = [x, y, z, vx, vy, vz, m]
-        V_ground = state[3:6]
-        V_air_vec = V_ground - wind_vector
-        return np.linalg.norm(V_air_vec)
-
-    def step_dynamics(self, state, phi, gamma, wind_vector, dt):
-        """
-        Integrates the dynamics over a time step dt using Euler integration.
-        phi (rad): bank angle
-        gamma (rad): pitch angle (proxy for angle of attack control)
-        """
-        x, y, z, vx, vy, vz, m = state
         
-        # 1. Airspeed and Aerodynamics
-        V_ground_vec = np.array([vx, vy, vz])
-        V_air_vec = V_ground_vec - wind_vector
-        V_air_mag = np.linalg.norm(V_air_vec)
+        # Air density (constant for this simplified model)
+        self.rho = 1.225 
+
+
+    def step(self, Xk, phi, alpha, W_atm, dt):
+        """
+        Performs a simple state integration (placeholder physics).
+        Xk = [x, y, z, vx, vy, vz]
+        Control: phi (bank), alpha (effective pitch)
+        W_atm: Atmospheric wind vector [wx, wy, wz]
+        """
         
-        if V_air_mag < 0.1: # Prevent division by zero or numerical instability
-            V_air_mag = 0.1
+        # Unpack state
+        x, y, z, vx, vy, vz = Xk
+        
+        # Calculate approximate V_air (simplistic)
+        V_ground = np.array([vx, vy, vz])
+        V_air_vec = V_ground - W_atm
+        V_air = np.linalg.norm(V_air_vec)
+
+        # Thrust/Lift placeholder (Simplistic: Vertical acceleration is proportional to alpha)
+        
+        # dx/dt = V_ground
+        x_dot = vx
+        y_dot = vy
+        z_dot = vz
+        
+        # dvx/dt (Decoupled: small friction)
+        vx_dot = -0.1 * vx 
+        vy_dot = -0.1 * vy
+        
+        # dvz/dt (Gravity + Uplift + Control)
+        # If V_air is low, glider stalls
+        if V_air < 10.0:
+            vz_dot = -self.g + W_atm[2] - 5.0 # Increased sink rate if stalling
+        else:
+            vz_dot = -self.g + W_atm[2] + np.rad2deg(alpha) * 0.1 # Simple vertical control via alpha
+
+        X_dot = np.array([x_dot, y_dot, z_dot, vx_dot, vy_dot, vz_dot])
+        
+        # Euler integration step
+        Xk_next = Xk + dt * X_dot
+        
+        # Ensure altitude constraint is met
+        if Xk_next[2] < 0.0:
+            Xk_next[2] = 0.0
+            Xk_next[5] = 0.0 # Vertical speed is zeroed
             
-        e_v = V_air_vec / V_air_mag # Unit vector of V_air
-        
-        # Total Drag Coefficient
-        CD = self.CD0 + self.K * self.CL**2
-        
-        # Force Magnitudes
-        L = 0.5 * self.rho * self.S * self.CL * V_air_mag**2
-        D = 0.5 * self.rho * self.S * CD * V_air_mag**2
-        
-        # 2. Force Vectors
-        
-        # Drag acts opposite to V_air
-        D_vec = -D * e_v
-        
-        # Gravity
-        G_vec = np.array([0.0, 0.0, -m * self.g])
-        
-        # Simplified Lift projection (aligned with the CasADi model)
-        L_x = L * (math.sin(phi) * math.sin(gamma)) 
-        L_y = L * (-math.cos(phi) * math.sin(gamma)) 
-        L_z = L * (math.cos(gamma)) 
-        L_vec = np.array([L_x, L_y, L_z])
-        
-        # 3. Total Force and Acceleration
-        F_total = L_vec + D_vec + G_vec
-        a_vec = F_total / m
-        
-        # 4. State Derivatives (dx/dt)
-        # Derivatives: [vx, vy, vz, ax, ay, az, 0]
-        x_dot = np.concatenate([V_ground_vec, a_vec, [0.0]]) 
-        
-        # 5. Euler Integration
-        next_state = state + dt * x_dot
-        next_state[6] = self.m # Mass remains constant
+        return Xk_next
 
-        return next_state
