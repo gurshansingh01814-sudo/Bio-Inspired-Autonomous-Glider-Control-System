@@ -101,8 +101,8 @@ class MPCController:
         
         # Objective Function
         J = 0 
-        Q_dist = 1.0     # Weight for distance to thermal
-        # CRITICAL FIX 2: Increased control cost to force smoother inputs, aiding solver stability
+        # CRITICAL FIX 1: Massively decrease distance weight (hyper-prioritize Z)
+        Q_dist = 0.001 
         R_control = 0.1 
         
         # Cost Loop
@@ -112,7 +112,7 @@ class MPCController:
             dist_sq = (X[0, k] - P_target[0])**2 + (X[1, k] - P_target[1])**2
             J += Q_dist * dist_sq
             
-            # 2. Survival Objective (CRITICAL FIX 1: Massively prioritize climbing)
+            # 2. Survival Objective (Massively prioritize climbing)
             J += -50000 * X[2, k+1] # Maximize Z at the next step
             
             # 3. Control Effort / Smoothness
@@ -145,7 +145,8 @@ class MPCController:
         opti.subject_to(S_alt >= 0.0)
         
         # Velocity Bounds 
-        V_MIN = 10.0 # m/s
+        # CRITICAL FIX 2: Raised V_MIN to 15.0 to stabilize the solver/Jacobian near high-lift maneuvers
+        V_MIN = 15.0 # m/s 
         V_MAX = 50.0 # m/s 
         V_air = ca.sqrt(X[3, :]**2 + X[4, :]**2 + X[5, :]**2)
         opti.subject_to(V_air >= V_MIN)
@@ -190,6 +191,5 @@ class MPCController:
             return U_optimal[:, 0] 
         
         except Exception as e:
-            # If the solver fails, return zero control (or previous successful control)
             print("\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
             return np.array([0.0, 0.0])
