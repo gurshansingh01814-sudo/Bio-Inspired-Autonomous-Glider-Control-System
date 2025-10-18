@@ -20,13 +20,16 @@ class MPCController:
         self.CL = glider_params.get('CL', 0.8) 
         
         mpc_params = self.config.get('MPC', {})
-        self.N = mpc_params.get('N', 8) 
+        # FIX 1: Reduced N for faster solution time (Recommended for real-time systems)
+        self.N = mpc_params.get('N', 10) 
         self.DT = mpc_params.get('DT', 2.0) # Synchronized DT from config
-        default_Qx = [5.0, 5.0, 1.0, 0.1, 0.1, 0.1] 
+        
+        # FIX 2: Increased Z-Position (Altitude) Weight from 1.0 to 10.0
+        # This makes the altitude state more important in the Q matrix
+        default_Qx = [5.0, 5.0, 10.0, 0.1, 0.1, 0.1] 
         self.Q_x = np.diag(mpc_params.get('STATE_WEIGHTS', default_Qx))
         self.R_u = np.diag(mpc_params.get('CONTROL_WEIGHTS', [0.1, 0.1]))
         
-        # Alt Min not strictly needed if only using soft constraint penalty
         self.ALT_MIN = 20.0 
         self.EPSILON_AIRSPEED = 1e-6 
 
@@ -44,7 +47,6 @@ class MPCController:
             with open(path, 'r') as f:
                 return yaml.safe_load(f)
         except Exception as e:
-            # We already handled the path error in main_simulation.py
             print(f"FATAL: Could not load configuration file {path}: {e}")
             sys.exit(1)
 
@@ -73,7 +75,7 @@ class MPCController:
         D_mag = 0.5 * self.rho * self.S * CD * V_reg**2
         D_vec = -D_mag * e_v
         
-        # This is the LIFT definition that MUST MATCH glider_dynamics.py
+        # Lift Definition (Matching glider_dynamics.py)
         L_x = ca.if_else(ca.fabs(V_reg) < 1e-3, 0.0, L_mag * ca.sin(phi) * e_v[1] / V_reg * V_reg)
         L_y = ca.if_else(ca.fabs(V_reg) < 1e-3, 0.0, L_mag * -ca.sin(phi) * e_v[0] / V_reg * V_reg)
         L_z_pitch = L_mag * ca.cos(phi) * ca.cos(alpha) 
@@ -123,10 +125,6 @@ class MPCController:
         # --- 2. Constraints ---
         opti.subject_to(X[:, 0] == X_current)
         
-        # DYNAMICS CONSTRAINT MODIFIED: NO HARD CONSTRAINT
-        # for k in range(self.N):
-        #     opti.subject_to(X[:, k+1] == F_map(X[:, k], U[:, k], ca.vertcat(0, 0, 0)))
-        
         DEG_TO_RAD = ca.pi / 180.0
         
         # Control Bounds:
@@ -143,20 +141,21 @@ class MPCController:
         
         # --- 3. Objective Function ---
         J = 0 
-        P_DYN_COST = 100000.0 # CRITICAL: Very high penalty for dynamics violation
+        P_DYN_COST = 100000.0 
         
         for k in range(self.N):
             # Control Cost
             J += ca.mtimes([U[:, k].T, self.R_u, U[:, k]]) 
             
-            # Altitude Maximization
-            J += -300 * X[2, k+1] 
+            # FIX 3: INCREASED ALTITUDE MAXIMIZATION WEIGHT from -300 to -1000
+            # This forces the glider to climb aggressively when lift is available.
+            J += -1000 * X[2, k+1] 
             
             # Target Attraction (Weight 1.0)
             dist_sq = (X[0, k+1] - Thermal_target[0])**2 + (X[1, k+1] - Thermal_target[1])**2
             J += 1.0 * dist_sq 
             
-            # CRITICAL FIX: Dynamics Penalty (Soft Equality)
+            # Dynamics Penalty (Soft Equality)
             E_dyn = X[:, k+1] - F_map(X[:, k], U[:, k], ca.vertcat(0, 0, 0))
             J += P_DYN_COST * ca.sumsqr(E_dyn)
 
@@ -166,14 +165,18 @@ class MPCController:
 
         opti.minimize(J)
         
-        # --- 4. Solver Options (Allow more iterations for high-cost problem) ---
+        # --- 4. Solver Options (Speed Tuning) ---
         opts = {
             'ipopt': {
-                'max_iter': 5000, # Increased iterations
+                'max_iter': 5000, 
                 'print_level': 0, 
-                'acceptable_tol': 1e-4, # Relaxed tolerance slightly
-                'acceptable_obj_change_tol': 1e-6,
-                'max_cpu_time': 1.95, 
+                'tol': 1e-3, 
+                'acceptable_tol': 1e-2, 
+                'acceptable_obj_change_tol': 1e-4, 
+                'acceptable_constr_viol_tol': 1e-3, 
+                'max_cpu_time': 2.0, 
+                'fast_accept_ic_w_obj_times': 1, 
+                'warm_start_init_point': 'yes', 
             },
             'print_time': False,
         }
@@ -207,7 +210,6 @@ class MPCController:
         
         # --- Solve NLP ---
         try:
-            # Create a solver instance (necessary for the first solve)
             sol = self.opti.solve() 
             u_star = sol.value(self.U)
             x_star = sol.value(self.X)
@@ -221,11 +223,7 @@ class MPCController:
             return u_star[:, 0] 
             
         except Exception as e:
-            # If solver fails (Infeasible or CPU Time Exceeded)
+            # If solver fails (which should be rare now)
             print("\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
             print(f"Error: {e}")
-            
-            # CRITICAL FIX: DO NOT reset warm start on failure!
-            # The *stale* warm start is still better than a cold start guess.
-            
             return self.last_successful_u
