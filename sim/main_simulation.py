@@ -7,8 +7,6 @@ import yaml # Added for robust config checking
 # --- CRITICAL FIX IMPORTS ---
 # Corrected package imports
 # NOTE: Assumes __init__.py exists in 'src' folder
-# NOTE: The user must ensure these modules (mpc_controller, glider_dynamics, atmospheric_model)
-#       are available in the python environment.
 from src.mpc_controller import MPCController
 from src.glider_dynamics import GliderDynamics
 from src.atmospheric_model import AtmosphericModel
@@ -74,9 +72,9 @@ class GliderControlSystem:
     def __init__(self, config_file_name='glider_config.yaml'):
         # 1. Find Project Root and Config Path
         self.PROJECT_ROOT = find_project_root()
-        # NOTE: Config file path updated to be robust, assuming 'glider_config.yaml' is at project root.
-        # Based on your prompt, it seems the config file is at the root or an easily accessible path.
-        self.CONFIG_PATH = os.path.join(self.PROJECT_ROOT, config_file_name) 
+        
+        # CRITICAL PATH FIX: Ensure 'data' folder is included in the path
+        self.CONFIG_PATH = os.path.join(self.PROJECT_ROOT, 'data', config_file_name) 
 
         print(f"Project Root: {self.PROJECT_ROOT}")
         print(f"Attempting to load config from: {self.CONFIG_PATH}")
@@ -86,7 +84,7 @@ class GliderControlSystem:
         if not os.path.exists(self.CONFIG_PATH):
             print("\nFATAL ERROR: Configuration file not found at expected path.")
             print(f"Path checked: {self.CONFIG_PATH}")
-            print("Please ensure 'glider_config.yaml' is in the project root or adjust the path.")
+            print("Please ensure 'glider_config.yaml' is in the 'data' folder within the project root.")
             sys.exit(1)
 
         # 3. Component Instantiation
