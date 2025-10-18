@@ -3,6 +3,7 @@ import numpy as np
 import yaml
 import sys
 import math
+import os # Ensure os is imported for config loading
 
 class MPCController:
 
@@ -31,7 +32,8 @@ class MPCController:
         self.K = ca.MX(glider_params.get('K', 0.04))
         self.g = ca.MX(env_params.get('gravity', 9.81))
         self.rho = ca.MX(env_params.get('rho_air', 1.225))
-        self.EPSILON_AIRSPEED = 1e-6
+        self.EPSILON_AIRSPEED = 1e-6 # Used for V_reg denominator
+        self.EPSILON_LIFT = 1e-6     # New epsilon for lift vector regularization
 
         # Problem Setup (State and Control Dimensions)
         self.NX = 6 # [x, y, z, vx, vy, vz]
@@ -53,7 +55,6 @@ class MPCController:
     def _glider_dynamics(self, X, U, W_atm_z):
         """
         Symbolic, continuous-time state-space model (X_dot = f(X, U, W_atm)).
-        This is a symbolic replica of the fixed glider_model.py
         """
         vx, vy, vz = X[3], X[4], X[5]
         CL, phi = U[0], U[1] # U[0] is CL, U[1] is phi
@@ -81,7 +82,11 @@ class MPCController:
         dot_product = ca.dot(e_z, e_v)
         e_L_raw = e_z - dot_product * e_v 
         
-        L_vert_unit = e_L_raw / (ca.norm_2(e_L_raw) + self.EPSILON_AIRSPEED)
+        # --- CRITICAL FIX: Regularize the magnitude of e_L_raw to prevent NaN in division ---
+        L_raw_mag_reg = ca.norm_2(e_L_raw) + self.EPSILON_LIFT
+        L_vert_unit = e_L_raw / L_raw_mag_reg
+        # -----------------------------------------------------------------------------------
+        
         L_side_unit = ca.cross(e_v, L_vert_unit) 
 
         # Lift Vector: Components are rotated by the bank angle (phi)
@@ -111,7 +116,7 @@ class MPCController:
         # Parameters
         P_init = opti.parameter(self.NX, 1)
         P_target = opti.parameter(2, 1) 
-        P_Wz = opti.parameter(1, self.N) # Thermal lift (Wz) over the horizon
+        P_Wz = opti.parameter(1, self.N)  # Thermal lift (Wz) over the horizon
         
         # Objective Function
         J = 0 

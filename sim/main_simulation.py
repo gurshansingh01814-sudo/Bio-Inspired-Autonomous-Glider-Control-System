@@ -7,7 +7,7 @@ import yaml
 
 # Assume the necessary classes are now correctly imported from src/
 try:
-    from src.glider_model import GliderDynamics 
+    from src.glider_dynamics import GliderDynamics 
     from src.mpc_controller import MPCController
     from src.atmospheric_model import AtmosphericModel
     # CRITICAL FIX: Removed incorrect and redundant import of deg_to_rad
