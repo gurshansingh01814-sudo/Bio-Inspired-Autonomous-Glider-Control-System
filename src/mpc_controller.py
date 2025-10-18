@@ -14,7 +14,7 @@ class MPCController:
         
         # Unpack Parameters
         mpc_params = self.config.get('MPC', {})
-        self.N = mpc_params.get('horizon_steps', 40)    # Prediction horizon
+        self.N = mpc_params.get('horizon_steps', 40)      # Prediction horizon
         self.DT = mpc_params.get('control_rate_s', 2.0) # Control Time step (seconds)
         
         # Unpack Glider/Control Limits
@@ -81,12 +81,11 @@ class MPCController:
         
         e_z = ca.vertcat(0.0, 0.0, 1.0)
         
-        # Projection and perpendicular vectors
+        # Projection and perpendicular vectors (e_L_raw is perpendicular to e_v in the vertical plane)
         dot_product = ca.dot(e_z, e_v)
         e_L_raw = e_z - dot_product * e_v 
         
         # CRITICAL FIX: Numerically safer unit vector calculation for Lift
-        # Uses norm-squared regularization for smoother gradient near zero.
         L_raw_mag_sq_reg = ca.sumsqr(e_L_raw) + self.EPSILON_LIFT**2
         L_raw_mag_reg = ca.sqrt(L_raw_mag_sq_reg)
 
@@ -116,7 +115,7 @@ class MPCController:
         # Decision variables
         X = opti.variable(self.NX, self.N + 1)
         U = opti.variable(self.NU, self.N)
-        S_alt = opti.variable(1, self.N + 1)
+        S_alt = opti.variable(1, self.N + 1) # Slack for altitude constraint
         
         # Parameters
         P_init = opti.parameter(self.NX, 1)
@@ -127,10 +126,10 @@ class MPCController:
         J = 0 
         
         # Define Tuning Weights
-        W_CLIMB = 1.0        
-        W_SMOOTH = 0.01      
-        W_DIST = 1.0         # <--- INCREASED from 0.05 to 1.0
-        W_SLACK = 1000.0     # <--- DECREASED from 10000.0 to 1000.0
+        W_CLIMB = 1.0         
+        W_SMOOTH = 0.01       
+        W_DIST = 1.0          
+        W_SLACK = 1000.0      
 
         # Cost Loop
         for k in range(self.N):
@@ -165,32 +164,42 @@ class MPCController:
         opti.subject_to(X[2, :] >= Z_MIN - S_alt) # Altitude constraint with slack
         opti.subject_to(S_alt >= 0.0)
         
-        # Velocity Bounds 
+        # Velocity Bounds and Stability Constraint
         V_MIN = 10.0 
         V_MAX = 50.0 
         V_air_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
+        V_mag = ca.sqrt(V_air_sq)
+        
+        # 1. Minimum and Maximum Airspeed constraint
         opti.subject_to(V_air_sq >= V_MIN**2)
-        opti.subject_to(ca.sqrt(V_air_sq) <= V_MAX)
+        opti.subject_to(V_mag <= V_MAX)
         
-        # --- Warm Start (Numerical DM for MX variables) ---
+        # 2. CRITICAL FIX: Flight Path Angle Constraint for numerical stability
+        # Prevents the glider from pointing too vertically (where the lift calculation breaks down).
+        MAX_GAMMA_RAD = math.radians(60.0) # Maximum steepness of 60 degrees (Adjustable)
+        MAX_GAMMA_SIN = ca.sin(MAX_GAMMA_RAD)
         
-        # 1. State Guess (X_guess): Zero Matrix (DM)
-        X_guess = ca.DM.zeros(self.NX, self.N + 1)
+        # Constraint: -sin(60 deg) <= vz/V_mag <= sin(60 deg)
+        # Note: X[5] is vz (vertical speed)
+        opti.subject_to(opti.bounded(-MAX_GAMMA_SIN, X[5, :] / V_mag, MAX_GAMMA_SIN))
+        
+        # --- IMPROVED WARM START ---
+        
+        # 1. State Guess (X_guess): Extrapolate the Initial State (P_init)
+        # This provides a feasible, constant initial guess that satisfies the 
+        # P_init constraint and the velocity/angle bounds (assuming the initial state is feasible).
+        opti.set_initial(X, ca.repmat(P_init, 1, self.N + 1)) 
         
         # 2. Control Guess (U_guess): Fixed Feasible Values (DM)
-        
-        # === START CRITICAL WARM START FIX ===
         MODERATE_BANK_RAD = math.radians(15.0) 
         MODERATE_CL = 0.7 
         U_safe = ca.DM([[MODERATE_CL], [MODERATE_BANK_RAD]]) # [CL, Phi] (0.7, 15 deg)
-        # === END CRITICAL WARM START FIX ===
         
-        U_guess = ca.repmat(U_safe, 1, self.N) # Tile the safe value across the horizon (results in a DM)
+        U_guess = ca.repmat(U_safe, 1, self.N) 
         
-        opti.set_initial(X, X_guess) 
         opti.set_initial(U, U_guess) 
         opti.set_initial(S_alt, 0.0) 
-        # ------------------------------------------------
+        # ---------------------------
 
         opti.minimize(J)
         
@@ -218,6 +227,6 @@ class MPCController:
             return U_optimal[:, 0] 
         
         except Exception as e:
-            # Fallback to a feasible, minimum-drag glide command (CL_MIN = 0.2)
-            # You can print the error here if needed, but keeping it silent avoids spamming the log.
+            # Fallback to a feasible, minimum-drag glide command (CL_MIN = 0.2, Phi = 0.0)
+            print(f"MPC Solver failed to converge: {e}. Falling back to safe glide.")
             return np.array([self.CL_MIN, 0.0])

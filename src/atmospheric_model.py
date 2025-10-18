@@ -58,4 +58,4 @@ class AtmosphericModel:
             
             return Wz
         else:
-            return 0.0 # No lift outside the thermal radius
+            return 0.0 # No lift outside the thermal radius 
