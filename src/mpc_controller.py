@@ -175,31 +175,35 @@ class MPCController:
         opti.subject_to(V_mag <= V_MAX)
         
         # 2. CRITICAL FIX: Flight Path Angle Constraint for numerical stability
-        # Prevents the glider from pointing too vertically (where the lift calculation breaks down).
         MAX_GAMMA_RAD = math.radians(60.0) # Maximum steepness of 60 degrees (Adjustable)
         MAX_GAMMA_SIN = ca.sin(MAX_GAMMA_RAD)
         
         # Constraint: -sin(60 deg) <= vz/V_mag <= sin(60 deg)
-        # Note: X[5] is vz (vertical speed)
         opti.subject_to(opti.bounded(-MAX_GAMMA_SIN, X[5, :] / V_mag, MAX_GAMMA_SIN))
         
-        # --- IMPROVED WARM START ---
+        # -----------------------------------------------
+        # --- CRITICAL FIX FOR MX/DM INITIALIZATION ---
+        # -----------------------------------------------
         
-        # 1. State Guess (X_guess): Extrapolate the Initial State (P_init)
-        # This provides a feasible, constant initial guess that satisfies the 
-        # P_init constraint and the velocity/angle bounds (assuming the initial state is feasible).
-        opti.set_initial(X, ca.repmat(P_init, 1, self.N + 1)) 
+        # 1. State Guess (X_guess): Use a feasible NUMERICAL placeholder (DM)
+        # We use a numerical array corresponding to a legal, non-zero speed glide
+        # [x, y, z, vx, vy, vz]
+        SAFE_X_GUESS_ARRAY = ca.DM([0.0, 0.0, 500.0, 15.0, 0.0, -1.0])
+        X_safe_guess_DM = ca.repmat(SAFE_X_GUESS_ARRAY, 1, self.N + 1)
+        
+        # set_initial must use a numerical DM for the guess value
+        opti.set_initial(X, X_safe_guess_DM) 
         
         # 2. Control Guess (U_guess): Fixed Feasible Values (DM)
         MODERATE_BANK_RAD = math.radians(15.0) 
         MODERATE_CL = 0.7 
-        U_safe = ca.DM([[MODERATE_CL], [MODERATE_BANK_RAD]]) # [CL, Phi] (0.7, 15 deg)
+        U_safe = ca.DM([[MODERATE_CL], [MODERATE_BANK_RAD]]) 
         
         U_guess = ca.repmat(U_safe, 1, self.N) 
         
         opti.set_initial(U, U_guess) 
         opti.set_initial(S_alt, 0.0) 
-        # ---------------------------
+        # -------------------------------------------
 
         opti.minimize(J)
         
@@ -209,6 +213,7 @@ class MPCController:
         }
         opti.solver('ipopt', opts)
 
+        # Function definition remains the same
         P = ca.vertcat(P_init, P_target, ca.reshape(P_Wz, self.N, 1))
         U_out = ca.vertcat(U)
         
