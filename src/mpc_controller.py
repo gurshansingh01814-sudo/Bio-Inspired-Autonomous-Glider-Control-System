@@ -14,7 +14,7 @@ class MPCController:
         
         # Unpack Parameters
         mpc_params = self.config.get('MPC', {})
-        self.N = mpc_params.get('horizon_steps', 40)      # Prediction horizon
+        self.N = mpc_params.get('horizon_steps', 40)    # Prediction horizon
         self.DT = mpc_params.get('control_rate_s', 2.0) # Control Time step (seconds)
         
         # Unpack Glider/Control Limits
@@ -57,6 +57,7 @@ class MPCController:
     def _glider_dynamics(self, X, U, W_atm_z):
         """
         Symbolic, continuous-time state-space model (X_dot = f(X, U, W_atm)).
+        This function is numerically stabilized.
         """
         vx, vy, vz = X[3], X[4], X[5]
         CL, phi = U[0], U[1] # U[0] is CL, U[1] is phi
@@ -67,14 +68,14 @@ class MPCController:
         # Air velocity calculation
         V_air_vec = V_ground - W_in
         V_air_mag = ca.norm_2(V_air_vec)
-        # Use robust V_reg
+        # Use robust V_reg for denominator stability
         V_reg = ca.sqrt(V_air_mag**2 + self.EPSILON_AIRSPEED**2) 
         e_v = V_air_vec / V_reg # Unit vector in direction of air velocity
         
         # 1. Drag Force (Fd)
-        CD = self.CD0 + self.K * CL**2              # Induced drag depends on control CL
+        CD = self.CD0 + self.K * CL**2 
         D_mag = 0.5 * self.rho * self.S * CD * V_reg**2
-        F_drag = -D_mag * e_v                       
+        F_drag = -D_mag * e_v 
         
         # 2. Lift Force (Fl)
         L_mag = 0.5 * self.rho * self.S * CL * V_reg**2
@@ -168,18 +169,24 @@ class MPCController:
         V_MIN = 10.0 
         V_MAX = 50.0 
         V_air_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
-        V_mag = ca.sqrt(V_air_sq)
+        V_mag = ca.sqrt(V_air_sq) # Airspeed magnitude
         
         # 1. Minimum and Maximum Airspeed constraint
-        opti.subject_to(V_air_sq >= V_MIN**2)
+        opti.subject_to(V_air_sq >= V_MIN**2) # Enforce minimum velocity squared
         opti.subject_to(V_mag <= V_MAX)
         
-        # 2. CRITICAL FIX: Flight Path Angle Constraint for numerical stability
-        MAX_GAMMA_RAD = math.radians(60.0) # Maximum steepness of 60 degrees (Adjustable)
+        # 2. CRITICAL FIX: Flight Path Angle Constraint for numerical stability (NO DIVISION)
+        # This constraint is rewritten from: -sin(gamma_max) <= vz / V_mag <= sin(gamma_max)
+        # To the numerically safe form: |vz| <= V_mag * sin(gamma_max)
+        MAX_GAMMA_RAD = math.radians(60.0) 
         MAX_GAMMA_SIN = ca.sin(MAX_GAMMA_RAD)
         
-        # Constraint: -sin(60 deg) <= vz/V_mag <= sin(60 deg)
-        opti.subject_to(opti.bounded(-MAX_GAMMA_SIN, X[5, :] / V_mag, MAX_GAMMA_SIN))
+        # Upper bound: vz <= V_mag * sin(gamma_max)
+        opti.subject_to(X[5, :] <= V_mag * MAX_GAMMA_SIN)
+        # Lower bound: vz >= -V_mag * sin(gamma_max)
+        opti.subject_to(X[5, :] >= -V_mag * MAX_GAMMA_SIN)
+        # This prevents NaN generation from division by small numbers near V_mag, 
+        # as V_mag is guaranteed to be >= V_MIN.
         
         # -----------------------------------------------
         # --- CRITICAL FIX FOR MX/DM INITIALIZATION ---
@@ -224,7 +231,8 @@ class MPCController:
         
         P_target = np.array([thermal_center[0], thermal_center[1]])
         P_Wz = Wz_prediction.flatten()
-        P_all = np.concatenate([initial_state, P_target, P_Wz])
+        # Ensure all inputs are numpy arrays/lists before concatenation
+        P_all = np.concatenate([initial_state.flatten(), P_target.flatten(), P_Wz.flatten()])
         
         try:
             U_flat = self.solver(P_all)
@@ -234,4 +242,5 @@ class MPCController:
         except Exception as e:
             # Fallback to a feasible, minimum-drag glide command (CL_MIN = 0.2, Phi = 0.0)
             print(f"MPC Solver failed to converge: {e}. Falling back to safe glide.")
+            # Note: This fallback should use the CL_MIN defined in the class
             return np.array([self.CL_MIN, 0.0])
