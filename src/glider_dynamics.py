@@ -11,8 +11,8 @@ class GliderDynamics:
         self.config = self._load_config(config_path)
         
         # Initial State: [x, y, z, vx, vy, vz]
-        # Starting point and initial velocity (e.g., 20 m/s in the x-direction)
-        self.state = np.array([0.0, 0.0, 200.0, 20.0, 0.0, 0.0])
+        # CRITICAL FIX 1: Start altitude increased from 200m to 400m for survival buffer
+        self.state = np.array([0.0, 0.0, 400.0, 20.0, 0.0, 0.0])
         
         # Load Glider parameters
         glider_params = self.config.get('GLIDER', {})
@@ -76,8 +76,6 @@ class GliderDynamics:
             # 2. Lift Vector: perpendicular to air velocity, tilted by control inputs
             if V_reg > 1e-3:
                 # Lift components derived from the MPC formulation (CasADi)
-                # These forces must counter Gravity and enable banking/turning.
-                
                 L_x = L_mag * np.sin(phi) * e_v[1] 
                 L_y = -L_mag * np.sin(phi) * e_v[0]
                 L_z = L_mag * np.cos(phi) * np.cos(alpha) 
