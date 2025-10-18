@@ -1,45 +1,54 @@
-
 import numpy as np
 import yaml
+import sys
 import os
 
 class AtmosphericModel:
-    """
-    Loads configuration and provides simplified thermal location and wind vector for simulation.
-    """
-    def __init__(self, full_config_path):
-        # Even if this class doesn't use the config for now, it must accept the path input.
+    
+    def __init__(self, config_path):
+        # Load configuration using the provided path
+        self.config = self._load_config(config_path)
         
-        # Thermal parameters (hardcoded for now, but ready for config integration)
-        self.thermal_cx = 100.0  # Center X
-        self.thermal_cy = 100.0  # Center Y
-        self.thermal_radius = 200.0
-        self.W_z_max = 3.0
+        # Thermal parameters are typically nested under 'THERMAL' in the config
+        thermal_params = self.config.get('THERMAL', {})
         
-    def get_thermal_center(self):
-        return np.array([self.thermal_cx, self.thermal_cy])
+        # CRITICAL FIX: Define the required attributes for main_simulation.py
+        self.center_x = thermal_params.get('center_x', 500.0)
+        self.center_y = thermal_params.get('center_y', 500.0)
+        
+        # Other necessary parameters for thermal dynamics
+        self.radius = thermal_params.get('radius', 100.0)
+        self.max_lift = thermal_params.get('max_lift', 4.0)
+        self.decay_alt = thermal_params.get('decay_altitude', 1500.0)
+        
+        print(f"Atmospheric Model (Thermal) initialized at ({self.center_x:.0f}, {self.center_y:.0f}) m.")
 
-    def get_thermal_radius(self):
-        return self.thermal_radius
-        
-    def get_wind_vector(self, position):
-        """
-        Calculates the wind vector [wx, wy, wz] at a given position [x, y, z].
-        Only vertical wind (wz) is non-zero, simulating a thermal.
-        """
-        x, y, z = position
-        dist = np.sqrt((x - self.thermal_cx)**2 + (y - self.thermal_cy)**2)
-        
-        W_z = 0.0
-        if dist < self.thermal_radius:
-            dist_ratio = dist / self.thermal_radius
-            # Smooth cosine model for uplift
-            W_z = self.W_z_max * (np.cos(np.pi * dist_ratio) + 1.0) / 2.0
-            
-        return np.array([0.0, 0.0, W_z])
 
-    def get_thermal_state(self, position):
-        """Returns True if the glider is inside the thermal radius."""
-        x, y, z = position
-        dist = np.sqrt((x - self.thermal_cx)**2 + (y - self.thermal_cy)**2)
-        return dist < self.thermal_radius
+    def _load_config(self, path):
+        """Loads configuration from a YAML file for internal use."""
+        try:
+            with open(path, 'r') as f:
+                return yaml.safe_load(f)
+        except Exception as e:
+            print(f"FATAL: Could not load configuration file {path} in AtmosphericModel: {e}")
+            sys.exit(1)
+
+    def get_thermal_lift(self, x, y, z):
+        """Calculates the vertical lift (Wz) at a given (x, y, z) position."""
+        
+        # Horizontal distance from thermal center
+        dist_h = np.sqrt((x - self.center_x)**2 + (y - self.center_y)**2)
+        
+        # 1. Radial decay (Gaussian-like)
+        radial_decay = np.exp(-0.5 * (dist_h / (self.radius / 2.0))**2)
+        
+        # 2. Altitude decay 
+        if z > self.decay_alt or z < 20.0:
+            alt_decay = 0.0
+        else:
+            # Linear decay from max lift at lower altitude to 0 at decay_alt
+            alt_decay = np.clip(1.0 - (z / self.decay_alt), 0.0, 1.0)
+        
+        Wz = self.max_lift * radial_decay * alt_decay
+        
+        return Wz
