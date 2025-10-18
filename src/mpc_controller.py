@@ -166,11 +166,15 @@ class MPCController:
         opti.subject_to(V_air_sq >= V_MIN**2)
         opti.subject_to(ca.sqrt(V_air_sq) <= V_MAX)
         
-        # --- CRITICAL FIX: Warm Start / Initial Guess ---
-        # Provides a safe, feasible starting point (straight glide at min CL)
-        # Note: P_init is a CasADi parameter, so we use its .full() representation for initialization
-        X_guess = P_init.full() @ ca.DM.ones(1, self.N + 1)
-        U_guess = ca.vertcat(ca.DM(self.CL_MIN), ca.DM(0.0)) @ ca.DM.ones(1, self.N)
+        # --- CRITICAL FIX: Symbolic Warm Start / Initial Guess ---
+        # Solves the "MX object has no attribute 'full'" error and ensures feasibility.
+        
+        # 1. State Guess (X_guess): Repeat the initial state (P_init) across the entire horizon (N+1 steps)
+        X_guess = ca.repmat(P_init, 1, self.N + 1)
+        
+        # 2. Control Guess (U_guess): Repeat the feasible control [CL_MIN, 0.0] across the horizon (N steps)
+        U_safe = ca.vertcat(ca.DM(self.CL_MIN), ca.DM(0.0)) # Numerical safe control vector
+        U_guess = ca.repmat(U_safe, 1, self.N)
         
         opti.set_initial(X, X_guess)
         opti.set_initial(U, U_guess)
@@ -204,6 +208,4 @@ class MPCController:
         
         except Exception as e:
             # Fallback to a feasible, minimum-drag glide command (CL_MIN = 0.2)
-            # This is only used if the solver explicitly raises an exception.
-            # print(f"\nWARNING: IPOPT failed to converge: {e}. Returning safe glide command.")
             return np.array([self.CL_MIN, 0.0])
