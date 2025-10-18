@@ -32,6 +32,10 @@ class GliderDynamics:
         self.EPSILON_AIRSPEED = 1e-4 
         self.EPSILON_LIFT = 1e-3     
         
+        # --- FIX: Initializing new logging attributes (CL and phi) ---
+        self.CL = 0.2  # Stores the current actual Lift Coefficient (initialized to a legal minimum)
+        self.phi = 0.0 # Stores the current actual Bank Angle (initialized to straight flight)
+        
     def _load_config(self, path):
         """Loads configuration from a YAML file for internal use."""
         if not os.path.exists(path):
@@ -106,6 +110,11 @@ class GliderDynamics:
         Integrates the glider dynamics forward one time step (dt_sim) using 
         Fourth-Order Runge-Kutta (RK4) integration for stability.
         """
+        # --- FIX: Store the commanded values for the logger ---
+        self.CL = CL_cmd
+        self.phi = phi_cmd
+        # -----------------------------------------------------
+
         # Get atmospheric lift at the current glider position
         x, y, z = self.X[0], self.X[1], self.X[2]
         W_atm_z = atmospheric_model.get_thermal_lift(x, y, z)
@@ -117,6 +126,7 @@ class GliderDynamics:
         
         # K2: Midpoint slope 1
         X2 = self.X + (dt_sim / 2.0) * K1
+        # W_atm_z is assumed constant over the RK4 steps for simplicity/speed
         K2 = self._state_dot(X2, CL_cmd, phi_cmd, W_atm_z)
         
         # K3: Midpoint slope 2
