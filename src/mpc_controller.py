@@ -127,10 +127,10 @@ class MPCController:
         J = 0 
         
         # Define Tuning Weights
-        W_CLIMB = 10.0         
+        W_CLIMB = 20.0         
         W_SMOOTH = 0.001       
         W_DIST = 1.0          
-        W_SLACK = 100000.0      
+        W_SLACK = 5000.0      
 
         # Cost Loop
         for k in range(self.N):
@@ -166,7 +166,7 @@ class MPCController:
         opti.subject_to(S_alt >= 0.0)
         
         # Velocity Bounds and Stability Constraint
-        V_MIN = 10.0 
+        V_MIN = 6.0 
         V_MAX = 50.0 
         V_air_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
         V_mag = ca.sqrt(V_air_sq) # Airspeed magnitude
