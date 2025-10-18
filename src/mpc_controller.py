@@ -22,6 +22,7 @@ class MPCController:
         self.MAX_BANK_RAD = 0.523599
         self.CL_MIN = 0.4 # Min lift coefficient (fast, low-drag glide)
         self.CL_MAX = 1.2 # Max lift coefficient (slow, high-lift thermal circle)
+        self.V_MIN = 1.0 # m/s
 
         # Unpack Glider parameters (for symbolic dynamics)
         glider_params = self.config.get('GLIDER', {})
@@ -172,11 +173,11 @@ class MPCController:
         opti.subject_to(S_alt >= 0.0)
         
         # Velocity Bounds and Stability Constraint
-        V_MIN = 6.0 
+        self.V_MIN
         V_MAX = 50.0 
         
         # 1. Minimum and Maximum Airspeed constraint
-        opti.subject_to(V_air_sq >= V_MIN**2- S_alt) # Enforce minimum velocity squared
+        opti.subject_to(V_air_sq >= self.V_MIN**2) # Enforce minimum velocity squared
         opti.subject_to(ca.sqrt(V_air_sq)<= V_MAX)
         
         # 2. CRITICAL FIX: Flight Path Angle Constraint for numerical stability (NO DIVISION)
