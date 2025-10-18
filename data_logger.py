@@ -34,13 +34,13 @@ class DataLogger:
             'vy': state[4],
             'vz': state[5],
             
-            # CRITICAL FIX: Log CL directly (dimensionless coefficient)
+            # Log CL directly (dimensionless coefficient)
             'CL_cmd': control[0], 
             
-            # CRITICAL FIX: Log Phi in radians to match the simulator
+            # Log Phi in radians to match the simulator
             'phi_cmd': control[1], 
             
-            # CRITICAL FIX: Consistent naming with main_simulation and plotter
+            # Consistent naming with main_simulation and plotter
             'Wz': thermal_wz, 
             'dist_to_center': dist_to_thermal
         }

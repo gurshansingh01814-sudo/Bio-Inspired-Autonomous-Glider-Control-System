@@ -7,7 +7,7 @@ import yaml
 
 # Assume the necessary classes are now correctly imported from src/
 try:
-    from src.glider_dynamics import GliderDynamics 
+    from src.glider_model import GliderDynamics 
     from src.mpc_controller import MPCController
     from src.atmospheric_model import AtmosphericModel
     # CRITICAL FIX: Removed incorrect and redundant import of deg_to_rad
@@ -146,6 +146,12 @@ if __name__ == '__main__':
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
     config_path = os.path.join(project_root, 'data', 'glider_config.yaml')
+    
+    # --- CRITICAL FIX: Use os.path.exists() instead of config_path.exists() ---
+    if not os.path.exists(config_path):
+        print(f"FATAL: Configuration file not found at {config_path}")
+        sys.exit(1)
+    # --- END FIX ---
     
     try:
         system = GliderControlSystem(config_path)

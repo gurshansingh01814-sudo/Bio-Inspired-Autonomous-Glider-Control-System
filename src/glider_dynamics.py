@@ -83,7 +83,7 @@ class GliderDynamics:
             D_mag = 0.5 * self.rho * self.S * CD * V_reg**2
             F_drag = -D_mag * e_v                       # Drag opposes air velocity vector
             
-            # 2. Lift Force (Fl) - CRITICALLY CORRECTED
+            # 2. Lift Force (Fl)
             L_mag = 0.5 * self.rho * self.S * CL * V_reg**2
             
             # Project Z-axis onto the plane perpendicular to e_v

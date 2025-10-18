@@ -40,7 +40,7 @@ class MPCController:
         
     def _load_config(self, path):
         """Loads configuration from a YAML file for internal use."""
-        if not path.exists(path):
+        if not os.path.exists(path):
             print(f"FATAL: Configuration file not found at {path}")
             sys.exit(1)
         try:
@@ -72,7 +72,7 @@ class MPCController:
         D_mag = 0.5 * self.rho * self.S * CD * V_reg**2
         F_drag = -D_mag * e_v                       
         
-        # 2. Lift Force (Fl) - CORRECTED VECTOR FORMULATION
+        # 2. Lift Force (Fl)
         L_mag = 0.5 * self.rho * self.S * CL * V_reg**2
         
         e_z = ca.vertcat(0.0, 0.0, 1.0)
@@ -110,7 +110,7 @@ class MPCController:
         
         # Parameters
         P_init = opti.parameter(self.NX, 1)
-        P_target = opti.parameter(2, 1)
+        P_target = opti.parameter(2, 1) 
         P_Wz = opti.parameter(1, self.N) # Thermal lift (Wz) over the horizon
         
         # Objective Function
@@ -189,5 +189,5 @@ class MPCController:
         
         except Exception as e:
             # Safe glide: Moderate CL (0.8), zero bank
-            print(f"\nWARNING: IPOPT failed to converge: {e}. Returning safe glide command.")
+            # print(f"\nWARNING: IPOPT failed to converge: {e}. Returning safe glide command.")
             return np.array([0.8, 0.0])

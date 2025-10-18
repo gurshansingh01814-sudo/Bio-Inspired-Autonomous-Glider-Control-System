@@ -10,7 +10,7 @@ class AtmosphericModel:
         
         self.config = self._load_config(config_path)
         
-        # CRITICAL FIX: Access parameters based on the corrected config file structure
+        # Access parameters based on the corrected config file structure
         atmos_params = self.config.get('ATMOSPHERE', {})
         thermal_params = atmos_params.get('THERMAL', {})
         
