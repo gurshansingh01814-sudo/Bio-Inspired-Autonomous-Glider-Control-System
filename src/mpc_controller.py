@@ -127,8 +127,8 @@ class MPCController:
         J = 0 
         
         # Define Tuning Weights
-        W_CLIMB = 1.0         
-        W_SMOOTH = 0.01       
+        W_CLIMB = 5.0         
+        W_SMOOTH = 0.001       
         W_DIST = 1.0          
         W_SLACK = 1000.0      
 
