@@ -93,7 +93,7 @@ class GliderDynamics:
             EPSILON_LIFT = 1e-4
             
             # Ensure lift vector direction is defined
-            L_vert_unit = e_L_raw / (norm(e_L_raw) + self.EPSILON_AIRSPEED)
+            L_vert_unit = e_L_raw / (norm(e_L_raw) + self.EPSILON_LIFT)
             
             # The cross-product gives the vector perpendicular to both L_vert_unit and e_v
             # This is the 'horizontal' or 'side' vector, used for banking

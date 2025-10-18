@@ -53,7 +53,7 @@ class GliderControlSystem:
         self.step_count = 0
         
         # Placeholder for previous control inputs: [CL_command, phi_command]
-        self.last_u_star = np.array([0.8, 0.0]) 
+        self.last_u_star = np.array([0.2, 0.0]) 
         
         print("System initialized successfully.")
 
