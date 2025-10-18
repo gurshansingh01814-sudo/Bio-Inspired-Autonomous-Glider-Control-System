@@ -6,27 +6,26 @@ import os
 class GliderDynamics:
     
     def __init__(self, config_path):
-        # Load configuration (assumed to be correct based on GliderControlSystem fix)
+        """Initializes the glider state and loads physical parameters."""
+        
         self.config = self._load_config(config_path)
         
         # Initial State: [x, y, z, vx, vy, vz]
-        # Assuming initial altitude is 200m and velocity is 20 m/s in the x-direction
-        # This state must be a NumPy array.
+        # Starting point and initial velocity (e.g., 20 m/s in the x-direction)
         self.state = np.array([0.0, 0.0, 200.0, 20.0, 0.0, 0.0])
         
-        # Store Glider parameters (used for dynamics calculation)
+        # Load Glider parameters
         glider_params = self.config.get('GLIDER', {})
-        self.m = glider_params.get('mass', 700.0)
-        self.S = glider_params.get('S', 14.0)
-        self.CD0 = glider_params.get('CD0', 0.015)
-        self.K = glider_params.get('K', 0.04)
-        self.CL = glider_params.get('CL', 0.8) 
+        self.m = glider_params.get('mass', 700.0)  # Mass (kg)
+        self.S = glider_params.get('S', 14.0)      # Wing area (m^2)
+        self.CD0 = glider_params.get('CD0', 0.015) # Zero-lift drag coefficient
+        self.K = glider_params.get('K', 0.04)      # Induced drag factor
+        self.CL = glider_params.get('CL', 0.8)     # Lift coefficient (constant)
+        
+        # Environmental constants
         self.g = 9.81
         self.rho = 1.225
-        
-        # Check if the mandatory state is initialized (CRITICAL)
-        if self.state is None:
-            raise RuntimeError("Glider state vector failed to initialize.")
+        self.EPSILON_AIRSPEED = 1e-6 # Regularization for division by zero
 
     def _load_config(self, path):
         """Loads configuration from a YAML file for internal use."""
@@ -37,66 +36,70 @@ class GliderDynamics:
             print(f"FATAL: Could not load configuration file {path} in GliderDynamics: {e}")
             sys.exit(1)
 
-    # --- MISSING METHOD FIX (CRITICAL) ---
     def get_state(self):
         """Returns the current state vector of the glider."""
         return self.state
 
-    def update(self, phi_command, alpha_command, dt, thermal_model):
+    def update(self, phi_command, alpha_command, dt, atmospheric_model):
         """
-        Calculates the next state using RK4 integration.
-        This method must already contain the complex dynamics logic.
+        Calculates the next state using RK4 integration over the timestep dt.
         """
         X = self.state
-        W_atm = np.array([0.0, 0.0, thermal_model.get_thermal_lift(X[0], X[1], X[2])])
+        
+        # Get atmospheric vertical wind (Wz) from the thermal model
+        W_atm = np.array([0.0, 0.0, atmospheric_model.get_thermal_lift(X[0], X[1], X[2])])
+        U_in = np.array([phi_command, alpha_command])
 
-        # --- RK4 Integration of Dynamics (Placeholder for the function f) ---
-        # NOTE: Your full physics function 'f' must be defined here or imported.
-        
-        # For this fix, we are just ensuring the structure is correct.
-        # Assuming f_dynamics (or similar) is defined and returns X_dot (6x1 vector)
-        
         def f_dynamics(X_in, U_in, W_in):
-            # This is where your physics equations (from X_dot) must be implemented
+            """Returns the state derivatives (X_dot = [V, a]) for RK4."""
             
-            # Simple placeholder (if you are missing the full dynamics implementation)
-            # The actual dynamics are complex and defined in the MPC solver.
-            # Here, we need the *numerical* version for simulation.
-            
-            # Placeholder for lift/drag calculations:
+            # State and Control
             vx, vy, vz = X_in[3], X_in[4], X_in[5]
+            phi, alpha = U_in[0], U_in[1]
+            
             V_ground = np.array([vx, vy, vz])
+            
+            # Air velocity calculation
             V_air_vec = V_ground - W_in
             V_air_mag = np.linalg.norm(V_air_vec)
+            V_reg = np.sqrt(V_air_mag**2 + self.EPSILON_AIRSPEED)
+            e_v = V_air_vec / V_reg # Unit vector in direction of air velocity
             
-            # If V_air_mag is near zero, use a small regularization
-            V_reg = np.sqrt(V_air_mag**2 + 1e-6)
-            e_v = V_air_vec / V_reg
-            
+            # Magnitude Calculations
             CD = self.CD0 + self.K * self.CL**2 
             L_mag = 0.5 * self.rho * self.S * self.CL * V_reg**2
             D_mag = 0.5 * self.rho * self.S * CD * V_reg**2
+            
+            # 1. Drag Vector: opposes air velocity
             D_vec = -D_mag * e_v
+            
+            # 2. Lift Vector: perpendicular to air velocity, tilted by control inputs
+            if V_reg > 1e-3:
+                # Lift components derived from the MPC formulation (CasADi)
+                # These forces must counter Gravity and enable banking/turning.
+                
+                L_x = L_mag * np.sin(phi) * e_v[1] 
+                L_y = -L_mag * np.sin(phi) * e_v[0]
+                L_z = L_mag * np.cos(phi) * np.cos(alpha) 
+                L_vec = np.array([L_x, L_y, L_z])
+            else:
+                 L_vec = np.zeros(3)
+            
+            # 3. Gravity Vector
             G_vec = np.array([0.0, 0.0, -self.m * self.g])
             
-            # Simplified Lift components (The full projection is complex)
-            # Use the correct, full lift vector from your dynamics derivation here:
-            # L_vec = L_mag * (Lift Direction Vector) 
-            
-            # For quick testing, we'll use a placeholder for force calculation:
-            F_total = D_vec + G_vec # Must include the full LIFT vector here
-            
+            # Total Force and Acceleration
+            F_total = L_vec + D_vec + G_vec
             a_vec = F_total / self.m
             
             X_dot = np.hstack((V_ground, a_vec))
             return X_dot
 
-        # --- RK4 Implementation ---
+        # --- RK4 Integration ---
         M = 4 
         dt_rk4 = dt / M
         X_k = X
-        U_in = np.array([phi_command, alpha_command])
-
+        
         for _ in range(M):
             k1 = f_dynamics(X_k, U_in, W_atm)
             k2 = f_dynamics(X_k + dt_rk4/2 * k1, U_in, W_atm)
@@ -106,5 +109,3 @@ class GliderDynamics:
         
         self.state = X_k
         return self.state
-
-# Ensure Thermal model is also present/imported, as GliderDynamics uses it.
