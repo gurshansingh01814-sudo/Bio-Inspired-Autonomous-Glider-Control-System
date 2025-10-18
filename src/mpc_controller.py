@@ -130,7 +130,8 @@ class MPCController:
         W_CLIMB = 20.0         
         W_SMOOTH = 0.001       
         W_DIST = 1.0          
-        W_SLACK = 5000.0      
+        W_SLACK = 5000.0 
+        W_AIRSPEED = 0.05     
 
         # Cost Loop
         for k in range(self.N):
@@ -143,7 +144,9 @@ class MPCController:
             J += W_DIST * dist_sq
             
             # 3. Control Effort / Smoothness
-            J += W_SMOOTH * ca.sumsqr(U[:, k])
+            J += W_SMOOTH * ca.sumsqr(U[:, k] - U[:, k-1])
+            # 4. Airspeed Regulation Cost
+            J += W_AIRSPEED * V_mag[k]
             
             # 4. Continuity Constraint (Dynamic Model)
             X_dot = self._glider_dynamics(X[:, k], U[:, k], P_Wz[0, k])
@@ -172,7 +175,7 @@ class MPCController:
         V_mag = ca.sqrt(V_air_sq) # Airspeed magnitude
         
         # 1. Minimum and Maximum Airspeed constraint
-        opti.subject_to(V_air_sq >= V_MIN**2- S_alt) # Enforce minimum velocity squared
+        opti.subject_to(V_air_sq >= V_MIN**2) # Enforce minimum velocity squared
         opti.subject_to(V_mag <= V_MAX)
         
         # 2. CRITICAL FIX: Flight Path Angle Constraint for numerical stability (NO DIVISION)
