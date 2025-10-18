@@ -25,7 +25,7 @@ class MPCController:
         self.V_MIN = 7.0 # m/s  <-- NEW TARGET MINIMUM (Changed from 6.0)
 
         # New parameter for Soft Constraint
-        self.W_STALL = 20000.0 # Extremely high weight for V_MIN violation penalty <-- NEW
+        self.W_STALL = 20000.0 # Extremely high weight for V_MIN violation penalty
 
         # Unpack Glider parameters (for symbolic dynamics)
         glider_params = self.config.get('GLIDER', {})
@@ -121,10 +121,13 @@ class MPCController:
         X = opti.variable(self.NX, self.N + 1)
         U = opti.variable(self.NU, self.N)
         S_alt = opti.variable(1, self.N + 1) # Slack for altitude constraint
-        S_stall = opti.variable(1, self.N + 1) # <-- NEW: Slack for stall constraint
+        S_stall = opti.variable(1, self.N + 1) # Slack for stall constraint
         
         # V_air_sq is a symbolic expression defined over all N+1 steps
         V_air_sq_ground = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
+        
+        # Define Target Airspeed for Cost Function <-- NEW
+        V_TARGET = 10.0 # m/s  
 
         # Parameters
         P_init = opti.parameter(self.NX, 1)
@@ -135,11 +138,11 @@ class MPCController:
         J = 0 
         
         # Define Tuning Weights
-        W_CLIMB = 20.0     
-        W_SMOOTH = 50.0     # <-- NEW WEIGHT (Changed from 25.0)
-        W_DIST = 8.0     
+        W_CLIMB = 10.0     # <-- CHANGED: Decreased to prioritize centering
+        W_SMOOTH = 50.0    # <-- REMAINS: High for initial stability
+        W_DIST = 15.0      # <-- CHANGED: Increased to enforce tighter circling
         W_SLACK = 5000.0 
-        W_AIRSPEED = 50.0   # <-- NEW WEIGHT (Changed from 100.0)
+        W_AIRSPEED = 50.0   
 
         # Cost Loop and Step-wise Constraints
         for k in range(self.N):
@@ -153,29 +156,29 @@ class MPCController:
             
             # 3. Control Effort / Smoothness
             J += W_SMOOTH * ca.sumsqr(U[:, k] - U[:, k-1])
-            # 4. Airspeed Regulation Cost (Using Ground Speed for simplicity/approximation)
-            J += W_AIRSPEED * ca.sqrt(V_air_sq_ground)[k]
+            
+            # --- Airspeed calculation and Cost update (CRITICAL REFACTOR) ---
+            vx_k, vy_k, vz_k = X[3, k], X[4, k], X[5, k]
+            W_atm_z_k = P_Wz[0, k]
+            V_air_vec_k = ca.vertcat(vx_k, vy_k, vz_k) - ca.vertcat(0.0, 0.0, W_atm_z_k)
+            V_air_sq_k = ca.sumsqr(V_air_vec_k) # Airspeed squared at step k
+            V_air_mag_k = ca.sqrt(V_air_sq_k)
+
+            # 4. Airspeed Regulation Cost (Quadratic Deviation from Target) <-- CRITICAL CHANGE
+            J += W_AIRSPEED * (V_air_mag_k - V_TARGET)**2 
             
             # 5. Continuity Constraint (Dynamic Model)
             X_dot = self._glider_dynamics(X[:, k], U[:, k], P_Wz[0, k])
             opti.subject_to(X[:, k+1] == X[:, k] + self.DT * X_dot)
 
-            # --- CRITICAL FIX: Soft Minimum Airspeed Constraint (Applied to Airspeed V_air_sq_k) ---
+            # --- Soft Minimum Airspeed Constraint (Uses V_air_sq_k calculated above) ---
             
-            vx, vy, vz = X[3, k], X[4, k], X[5, k]
-            W_atm_z = P_Wz[0, k]
-            
-            V_ground = ca.vertcat(vx, vy, vz)
-            W_in = ca.vertcat(0.0, 0.0, W_atm_z)
-            V_air_vec = V_ground - W_in
-            V_air_sq_k = ca.sumsqr(V_air_vec) # Airspeed squared at step k
-
             # 1. Enforce minimum air velocity squared using slack (Soft Constraint)
             opti.subject_to(V_air_sq_k >= self.V_MIN**2 - S_stall[0, k])
             opti.subject_to(S_stall[0, k] >= 0.0)
             
             # 2. Add high penalty to the objective function for any violation
-            J += self.W_STALL * S_stall[0, k] # <-- NEW COST TERM
+            J += self.W_STALL * S_stall[0, k] 
 
             # Enforce maximum air velocity squared (Hard Constraint remains)
             V_MAX = 50.0
@@ -187,7 +190,7 @@ class MPCController:
         # --- Terminal/Final State Cost (N+1 step) ---
         J += W_DIST * ((X[0, self.N] - P_target[0])**2 + (X[1, self.N] - P_target[1])**2)
         J += W_SLACK * ca.sumsqr(S_alt)
-        J += self.W_STALL * S_stall[0, self.N] # <-- NEW: Final slack penalty
+        J += self.W_STALL * S_stall[0, self.N] # Final stall slack penalty
 
         # --- Constraints ---
         opti.subject_to(X[:, 0] == P_init)
@@ -215,9 +218,6 @@ class MPCController:
         opti.subject_to(V_air_sq_N >= self.V_MIN**2 - S_stall[0, self.N])
         opti.subject_to(S_stall[0, self.N] >= 0.0)
         # --- END CRITICAL FIX ---
-
-
-        # --- DELETED INCORRECT GLOBAL AIRSPEED CONSTRAINTS BLOCK HERE ---
 
 
         # 2. CRITICAL FIX: Flight Path Angle Constraint for numerical stability (NO DIVISION)
@@ -254,7 +254,7 @@ class MPCController:
         
         opti.set_initial(U, U_guess) 
         opti.set_initial(S_alt, 0.0) 
-        opti.set_initial(S_stall, 0.0) # <-- NEW: Initial guess for stall slack
+        opti.set_initial(S_stall, 0.0) # Initial guess for stall slack
         # -------------------------------------------
 
         opti.minimize(J)
