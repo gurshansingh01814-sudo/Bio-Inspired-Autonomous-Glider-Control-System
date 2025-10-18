@@ -32,17 +32,15 @@ class AtmosphericModel:
             print(f"FATAL: Could not load configuration file {path}: {e}")
             sys.exit(1)
 
-    # --- CRITICAL FIX: Add the missing getter method ---
     def get_thermal_center(self):
         """Returns the [x, y] coordinates of the thermal center."""
         return self.thermal_center
-    # ----------------------------------------------------
 
     def get_thermal_lift(self, x, y, z):
         """
-        Calculates the vertical wind (Wz) at a given (x, y, z) location.
-        This simplified model returns 0 outside the thermal radius, and W_z_max inside.
-        (A real model would use a smooth distribution).
+        Calculates the vertical wind (Wz) at a given (x, y, z) location using
+        a smooth, conical lift profile. Lift is strongest at the center and 
+        drops linearly to zero at the edge.
         """
         # Calculate horizontal distance to the thermal center
         dx = x - self.thermal_center[0]
@@ -50,7 +48,14 @@ class AtmosphericModel:
         horizontal_distance = np.sqrt(dx**2 + dy**2)
         
         if horizontal_distance <= self.thermal_radius:
-            # Simple assumption: Full max lift inside the cylinder
-            return self.W_z_max
+            # Conical Profile: Lift scales linearly from W_z_max at center (dist=0) 
+            # to 0 at the radius (dist=radius).
+            lift_factor = 1.0 - (horizontal_distance / self.thermal_radius)
+            Wz = self.W_z_max * lift_factor
+            
+            # Altitude Factor (Optional but helpful for realism)
+            # You can add logic here if lift fades with altitude, e.g., lift * (1 - z/z_max)
+            
+            return Wz
         else:
-            return 0.0 # No lift outside
+            return 0.0 # No lift outside the thermal radius
