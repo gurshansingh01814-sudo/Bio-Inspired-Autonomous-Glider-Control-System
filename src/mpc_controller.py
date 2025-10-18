@@ -127,7 +127,7 @@ class MPCController:
         J = 0 
         
         # Define Tuning Weights
-        W_CLIMB = 5.0         
+        W_CLIMB = 10.0         
         W_SMOOTH = 0.001       
         W_DIST = 1.0          
         W_SLACK = 1000.0      
@@ -203,7 +203,7 @@ class MPCController:
         
         # 2. Control Guess (U_guess): Fixed Feasible Values (DM)
         MODERATE_BANK_RAD = math.radians(15.0) 
-        MODERATE_CL = 0.5 
+        MODERATE_CL = 0.6
         U_safe = ca.DM([[MODERATE_CL], [MODERATE_BANK_RAD]]) 
         
         U_guess = ca.repmat(U_safe, 1, self.N) 
