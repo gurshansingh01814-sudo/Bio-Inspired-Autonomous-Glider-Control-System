@@ -79,29 +79,23 @@ class MPCController:
         V_air_mag = ca.sqrt(ca.sumsqr(V_air_vec))
         
         # --- 2. CRITICAL: Regularization for Stability ---
-        # V_reg: Used for both unit vector and force calculation
         V_reg = ca.sqrt(V_air_mag**2 + self.EPSILON_AIRSPEED)
         
         # Unit vector of air velocity (e_v)
         e_v = V_air_vec / V_reg
         
         # --- 3. Aerodynamic Forces ---
-        
-        # Total Drag Coefficient (simplified)
         CD = self.CD0 + self.K * self.CL**2 
-        
-        # Lift and Drag Magnitudes (using V_reg)
         L_mag = 0.5 * self.rho * self.S * self.CL * V_reg**2
         D_mag = 0.5 * self.rho * self.S * CD * V_reg**2
         
-        # Drag Vector (always opposite e_v)
+        # Drag Vector
         D_vec = -D_mag * e_v
         
         # Lift Vector (Simplified projection using controls)
         L_x = ca.if_else(ca.fabs(V_reg) < 1e-3, 0.0, L_mag * ca.sin(phi) * e_v[1] / V_reg)
         L_y = ca.if_else(ca.fabs(V_reg) < 1e-3, 0.0, L_mag * -ca.sin(phi) * e_v[0] / V_reg)
-        L_z_pitch = L_mag * ca.cos(phi) * ca.cos(alpha) # Main lift component
-        
+        L_z_pitch = L_mag * ca.cos(phi) * ca.cos(alpha) 
         L_vec = ca.vertcat(L_x, L_y, L_z_pitch)
         
         # --- 4. Total Force and Dynamics (F = ma) ---
@@ -130,7 +124,6 @@ class MPCController:
             k4 = f(X_k + DT_RK4 * k3, U, W_atm_casadi)
             X_k = X_k + DT_RK4/6 * (k1 + 2*k2 + 2*k3 + k4)
         
-        # Discrete-time dynamics map
         F_map = ca.Function('F_map', [X, U, W_atm_casadi], [X_k], 
                             ['x_in', 'u_in', 'p_in'], ['x_next'])
 
@@ -145,28 +138,24 @@ class MPCController:
         opti = ca.Opti()
         
         # Decision Variables
-        U = opti.variable(NU, self.N)       # Control trajectory
-        X = opti.variable(NX, self.N + 1)   # State trajectory
-        
-        # CRITICAL FIX 1: Add Slack Variable (S) for Altitude Constraint (to handle infeasibility)
-        S = opti.variable(1, self.N + 1)
+        U = opti.variable(NU, self.N)       
+        X = opti.variable(NX, self.N + 1)   
+        S = opti.variable(1, self.N + 1) # Slack variable
         opti.subject_to(S >= 0)
         
-        # Parameters (P): Current state, Thermal Target, Wind
+        # Parameters
         P = opti.parameter(NX + 3) 
         X_current = P[:NX]
-        Thermal_target = P[NX:] # [Target_X, Target_Y, Thermal_Radius]
+        Thermal_target = P[NX:] 
 
         # --- 2. Initial Condition Constraint ---
         opti.subject_to(X[:, 0] == X_current)
         
-        # --- 3. Dynamic Constraints (Equality Constraints) ---
+        # --- 3. Dynamic Constraints ---
         for k in range(self.N):
             opti.subject_to(X[:, k+1] == F_map(X[:, k], U[:, k], ca.vertcat(0, 0, 0)))
             
         # --- 4. Bounds and Constraints ---
-        
-        # Degree to Radian conversion factor
         DEG_TO_RAD = ca.pi / 180.0
         
         # Control Bounds:
@@ -178,7 +167,7 @@ class MPCController:
         for k in range(self.N + 1):
              opti.subject_to(X[2, k] + S[0, k] >= self.ALT_MIN) 
         
-        # Velocity Bounds (5 to 30 m/s)
+        # Velocity Bounds 
         opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 >= 5.0**2)
         opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 <= 30.0**2)
         
@@ -186,18 +175,18 @@ class MPCController:
         J = 0 
         
         for k in range(self.N):
-            # Minimize Control Effort (Smoothness)
+            # Minimize Control Effort 
             J += ca.mtimes([U[:, k].T, self.R_u, U[:, k]]) 
 
             # Primary Objective: Maximize altitude
-            # CRITICAL FIX 2: Slightly reduce altitude weight to ease numerical stiffness
-            J += -400 * X[2, k+1] # Reduced from -500 to -400
+            # CRITICAL FIX 2: Reduce altitude weight further to ease convergence
+            J += -300 * X[2, k+1] # Reduced from -400 to -300
             
-            # Secondary Objective: Navigate towards the thermal (Minimize horizontal distance squared)
+            # Secondary Objective: Navigate towards the thermal 
             dist_sq = (X[0, k+1] - Thermal_target[0])**2 + (X[1, k+1] - Thermal_target[1])**2
             J += 0.01 * dist_sq 
         
-        # Tertiary Objective: Penalize Slack Variable Use (High penalty to discourage constraint violation)
+        # Tertiary Objective: Penalize Slack Variable Use (Keep high penalty)
         J += 1000 * ca.sumsqr(S) 
 
         opti.minimize(J)
@@ -205,11 +194,14 @@ class MPCController:
         # --- 6. Solver Options and Compilation ---
         opts = {
             'ipopt': {
-                # CRITICAL FIX 3: Increase max iterations to allow convergence
-                'max_iter': 3000, # Increased from 1000 to 3000
+                'max_iter': 3000, 
                 'print_level': 0, 
                 'acceptable_tol': 1e-6, 
-                'acceptable_obj_change_tol': 1e-6
+                'acceptable_obj_change_tol': 1e-6,
+                # CRITICAL FIX 1: Allow larger steps to speed up convergence
+                'max_cpu_time': 0.1, # Add a small time limit if max_iter fails (IPOPT default)
+                'alpha_max_primal': 100, # Allow large primal steps (default is 1e8, but we make it explicit)
+                'alpha_max_dual': 100, # Allow large dual steps
             },
             'print_time': False,
         }
@@ -263,5 +255,5 @@ class MPCController:
             print("\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
             print(f"Error: {e}")
             
-            # Use the last successful control as a fallback, and keep the previous warm start
+            # Use the last successful control as a fallback
             return self.last_successful_u
