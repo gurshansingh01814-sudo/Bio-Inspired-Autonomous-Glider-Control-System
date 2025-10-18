@@ -26,7 +26,7 @@ class MPCController:
         self.CL = glider_params.get('CL', 0.8) # Constant Lift Coefficient
         
         mpc_params = self.config.get('MPC', {})
-        # Final N for robustness (16s horizon with DT=2.0s)
+        # Horizon maintained at N=8
         self.N = 8 
         self.DT = mpc_params.get('PREDICT_DT', 1.0) # Should load 2.0 from config
         self.Q_x = np.diag(mpc_params.get('STATE_WEIGHTS', [10.0, 10.0, 1.0, 0.1, 0.1, 0.1]))
@@ -169,7 +169,8 @@ class MPCController:
              opti.subject_to(X[2, k] + S[0, k] >= self.ALT_MIN) 
         
         # Velocity Bounds 
-        opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 >= 5.0**2)
+        # CRITICAL FIX: Relax minimum airspeed for feasibility (from 5.0 to 4.5 m/s)
+        opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 >= 4.5**2) 
         opti.subject_to(X[3, :]**2 + X[4, :]**2 + X[5, :]**2 <= 30.0**2)
         
         # --- 5. Objective Function ---
@@ -187,7 +188,7 @@ class MPCController:
             J += 0.01 * dist_sq 
         
         # Tertiary Objective: Penalize Slack Variable Use (Reduced penalty for feasibility)
-        J += 100 * ca.sumsqr(S) # CRITICAL FIX: Reduced from 1000 to 100
+        J += 100 * ca.sumsqr(S) 
 
         opti.minimize(J)
         
@@ -198,7 +199,8 @@ class MPCController:
                 'print_level': 0, 
                 'acceptable_tol': 1e-4, 
                 'acceptable_obj_change_tol': 1e-6,
-                'max_cpu_time': 1.8, 
+                # CRITICAL FIX: Increase CPU time slightly for the 2.0s time step
+                'max_cpu_time': 1.9, # Increased from 1.8 to 1.9
             },
             'print_time': False,
         }
