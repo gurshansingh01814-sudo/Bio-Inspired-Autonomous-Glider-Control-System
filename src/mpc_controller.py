@@ -130,7 +130,7 @@ class MPCController:
         W_CLIMB = 10.0         
         W_SMOOTH = 0.001       
         W_DIST = 1.0          
-        W_SLACK = 1000.0      
+        W_SLACK = 100000.0      
 
         # Cost Loop
         for k in range(self.N):
@@ -172,7 +172,7 @@ class MPCController:
         V_mag = ca.sqrt(V_air_sq) # Airspeed magnitude
         
         # 1. Minimum and Maximum Airspeed constraint
-        opti.subject_to(V_air_sq >= V_MIN**2) # Enforce minimum velocity squared
+        opti.subject_to(V_air_sq >= V_MIN**2- S_alt) # Enforce minimum velocity squared
         opti.subject_to(V_mag <= V_MAX)
         
         # 2. CRITICAL FIX: Flight Path Angle Constraint for numerical stability (NO DIVISION)
