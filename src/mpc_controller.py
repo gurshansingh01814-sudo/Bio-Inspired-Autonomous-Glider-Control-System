@@ -44,7 +44,6 @@ class MPCController:
     def _glider_dynamics(self, X, U, W_atm):
         """
         Symbolic, continuous-time state-space model (X_dot = f(X, U, W_atm)).
-        This must match the numerical integration in GliderDynamics.
         """
         x, y, z, vx, vy, vz = ca.vertsplit(X)
         phi, alpha = ca.vertsplit(U)
@@ -88,41 +87,38 @@ class MPCController:
         
         opti = ca.Opti()
 
-        # Decision variables: State (X) and Control (U) sequences
+        # Decision variables
         X = opti.variable(self.NX, self.N + 1) # State trajectory
         U = opti.variable(self.NU, self.N)     # Control input sequence
         
-        # Parameters: Initial State (P_init) and Target (P_target), Thermal (P_thermal)
+        # Parameters
         P_init = opti.parameter(self.NX, 1)    # Initial state
         P_target = opti.parameter(2, 1)        # Target (thermal center [x, y])
         P_Wz = opti.parameter(1, self.N)       # Thermal lift (Wz) over the horizon
         
-        # Slack variable for altitude constraint violation (z > Z_min + S_alt)
+        # Slack variable for altitude constraint violation
         S_alt = opti.variable(1, self.N + 1)   
         
-        # Objective Function (Minimize Energy, Maximize Altitude, Reach Thermal)
+        # Objective Function
         J = 0 
         Q_dist = 1.0     # Weight for distance to thermal
-        Q_velocity = 0.1 # Weight for maintaining nominal speed
-        R_control = 0.01 # Weight for smoothness of control inputs
+        # CRITICAL FIX 2: Increased control cost to force smoother inputs, aiding solver stability
+        R_control = 0.1 
         
         # Cost Loop
         for k in range(self.N):
-            
-            # --- Objective: Pathing and Energy ---
             
             # 1. Distance to Thermal Cost (Minimize distance)
             dist_sq = (X[0, k] - P_target[0])**2 + (X[1, k] - P_target[1])**2
             J += Q_dist * dist_sq
             
-            # 2. Survival Objective (CRITICAL: Prioritize Climbing)
-            # We want to maximize Z, so we minimize -Z. Set to a very large weight.
-            J += -1000 * X[2, k+1] # Maximize Z at the next step
+            # 2. Survival Objective (CRITICAL FIX 1: Massively prioritize climbing)
+            J += -50000 * X[2, k+1] # Maximize Z at the next step
             
             # 3. Control Effort / Smoothness
             J += R_control * ca.sumsqr(U[:, k])
             
-            # 4. Continuity (Integrate dynamics forward)
+            # 4. Continuity 
             X_dot = self._glider_dynamics(X[:, k], U[:, k], P_Wz[0, k])
             opti.subject_to(X[:, k+1] == X[:, k] + self.DT * X_dot)
 
@@ -130,7 +126,6 @@ class MPCController:
         J += Q_dist * ((X[0, self.N] - P_target[0])**2 + (X[1, self.N] - P_target[1])**2)
         
         # --- Penalize Altitude Constraint Violation ---
-        # CRITICAL FIX 2: Increased penalty for altitude slack violation
         J += 10000 * ca.sumsqr(S_alt) # Massive penalty on slack variable
 
         # --- Constraints ---
@@ -138,23 +133,20 @@ class MPCController:
         # 1. Initial State Constraint
         opti.subject_to(X[:, 0] == P_init)
         
-        # 2. Control Bounds (Bank angle phi and Pitch angle alpha)
+        # 2. Control Bounds (Pitch/Alpha and Bank/Phi)
         DEG_TO_RAD = math.pi / 180.0
-        # Bank Angle (Phi): +/- 45 degrees
         opti.subject_to(opti.bounded(-45.0 * DEG_TO_RAD, U[0, :], 45.0 * DEG_TO_RAD))
-        # Pitch Angle (Alpha): Relaxed max pitch to allow for high lift maneuvers
-        # CRITICAL FIX 3: Increased max pitch from 15deg to 20deg
+        # Pitch Angle (Alpha): Max lift maneuver allowed
         opti.subject_to(opti.bounded(-5.0 * DEG_TO_RAD, U[1, :], 20.0 * DEG_TO_RAD))
         
         # 3. State Bounds
-        # Altitude (Z): Must stay above Z_min. Use slack variable S_alt >= 0.
         Z_MIN = 20.0 # meters
         opti.subject_to(X[2, :] >= Z_MIN - S_alt) 
         opti.subject_to(S_alt >= 0.0)
         
-        # Velocity Bounds (must maintain a minimum airspeed to avoid stall)
+        # Velocity Bounds 
         V_MIN = 10.0 # m/s
-        V_MAX = 50.0 # m/s (safe upper limit)
+        V_MAX = 50.0 # m/s 
         V_air = ca.sqrt(X[3, :]**2 + X[4, :]**2 + X[5, :]**2)
         opti.subject_to(V_air >= V_MIN)
         opti.subject_to(V_air <= V_MAX)
@@ -166,11 +158,10 @@ class MPCController:
         opts = {
             'ipopt': {
                 'max_iter': 100,
-                'print_level': 0, # 0 for quiet, 3 for maximum
+                'print_level': 0, 
                 'acceptable_tol': 1e-6,
                 'acceptable_obj_change_tol': 1e-4,
                 'tol': 1e-4,
-                # 'fast_accept_ic_w_obj_times': 1, # UNSTABLE OPTION: REMOVED
             },
             'print_time': 0,
         }
@@ -185,27 +176,20 @@ class MPCController:
     def solve_mpc(self, initial_state, thermal_center, Wz_prediction):
         """
         Solves the MPC problem for the current time step.
-        Returns the optimal control input (phi, alpha) for the first step.
         """
         
-        # The function expects parameters concatenated as [P_init, P_target, P_Wz]
         P_target = np.array([thermal_center[0], thermal_center[1]])
         P_Wz = Wz_prediction.flatten()
         
         P_all = np.concatenate([initial_state, P_target, P_Wz])
         
         try:
-            # The solver function returns the flat control vector U (NU * N)
             U_flat = self.solver(P_all)
             U_optimal = np.array(U_flat).reshape(self.NU, self.N)
             
-            # Return only the first control input (phi, alpha)
             return U_optimal[:, 0] 
         
         except Exception as e:
-            # If the solver fails (e.g., Infeasible, Max Iterations), return zero control
-            # This is safer than crashing, allowing the system to use the previous command.
+            # If the solver fails, return zero control (or previous successful control)
             print("\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
-            # In a real system, you would store and return the previously commanded U.
-            # For simulation, returning zero or a small lift command is safer.
             return np.array([0.0, 0.0])
