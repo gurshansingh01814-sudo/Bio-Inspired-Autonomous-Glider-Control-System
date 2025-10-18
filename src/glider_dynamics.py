@@ -2,99 +2,120 @@ import numpy as np
 import yaml
 import sys
 import os
+from numpy.linalg import norm # Import norm specifically for cleaner code
+
+# Helper: Converts degrees to radians for internal calculations
+def deg_to_rad(deg):
+    return deg * (np.pi / 180.0)
 
 class GliderDynamics:
     
     def __init__(self, config_path):
-        """Initializes the glider state and loads physical parameters."""
+        """Initializes the glider state and loads physical parameters from config."""
         
         self.config = self._load_config(config_path)
         
-        # Initial State: [x, y, z, vx, vy, vz]
-        # CRITICAL FIX 1: Start altitude increased from 200m to 400m for survival buffer
-        self.state = np.array([0.0, 0.0, 400.0, 20.0, 0.0, 0.0])
+        # Load SIMULATION parameters
+        sim_params = self.config.get('SIMULATION', {})
+        self.state = np.array(sim_params.get('initial_state', [0.0, 0.0, 400.0, 20.0, 0.0, 0.0]))
         
-        # Load Glider parameters
+        # Load GLIDER parameters
         glider_params = self.config.get('GLIDER', {})
-        self.m = glider_params.get('mass', 700.0)  # Mass (kg)
-        self.S = glider_params.get('S', 14.0)      # Wing area (m^2)
-        self.CD0 = glider_params.get('CD0', 0.015) # Zero-lift drag coefficient
-        self.K = glider_params.get('K', 0.04)      # Induced drag factor
-        self.CL = glider_params.get('CL', 0.8)     # Lift coefficient (constant)
+        self.m = glider_params.get('mass', 20.0)        # Mass (kg)
+        self.S = glider_params.get('S', 14.0)          # Wing area (m^2)
+        self.CD0 = glider_params.get('CD0', 0.015)     # Zero-lift drag coefficient
+        self.K = glider_params.get('K', 0.04)          # Induced drag factor
         
-        # Environmental constants
-        self.g = 9.81
-        self.rho = 1.225
-        self.EPSILON_AIRSPEED = 1e-6 # Regularization for division by zero
+        # Load ATMOSPHERE parameters
+        env_params = self.config.get('ATMOSPHERE', {})
+        self.g = env_params.get('gravity', 9.81)       # Gravitational acceleration
+        self.rho = env_params.get('rho_air', 1.225)    # Air density
+        self.EPSILON_AIRSPEED = 1e-6                   # Regularization for division by zero
 
     def _load_config(self, path):
-        """Loads configuration from a YAML file for internal use."""
+        """Loads configuration from a YAML file. Simplified to a dictionary."""
+        if not os.path.exists(path):
+            print(f"FATAL: Configuration file not found at {path}")
+            sys.exit(1)
         try:
             with open(path, 'r') as f:
                 return yaml.safe_load(f)
         except Exception as e:
-            print(f"FATAL: Could not load configuration file {path} in GliderDynamics: {e}")
+            print(f"FATAL: Could not load configuration file {path}: {e}")
             sys.exit(1)
 
     def get_state(self):
         """Returns the current state vector of the glider."""
         return self.state
 
-    def update(self, phi_command, alpha_command, dt, atmospheric_model):
+    def update(self, CL_command, phi_command, dt, atmospheric_model):
         """
         Calculates the next state using RK4 integration over the timestep dt.
+        Control Inputs (U_in):
+        - CL_command: Commanded Lift Coefficient (u1)
+        - phi_command: Commanded Bank Angle (u2)
         """
         X = self.state
         
         # Get atmospheric vertical wind (Wz) from the thermal model
-        W_atm = np.array([0.0, 0.0, atmospheric_model.get_thermal_lift(X[0], X[1], X[2])])
-        U_in = np.array([phi_command, alpha_command])
+        W_atm_z = atmospheric_model.get_thermal_lift(X[0], X[1], X[2])
+        W_atm = np.array([0.0, 0.0, W_atm_z])
+        U_in = np.array([CL_command, phi_command]) # Note: phi must be in radians here
 
         def f_dynamics(X_in, U_in, W_in):
             """Returns the state derivatives (X_dot = [V, a]) for RK4."""
             
             # State and Control
             vx, vy, vz = X_in[3], X_in[4], X_in[5]
-            phi, alpha = U_in[0], U_in[1]
+            CL, phi = U_in[0], U_in[1]
             
             V_ground = np.array([vx, vy, vz])
             
-            # Air velocity calculation
+            # Air velocity calculation (V_air = V_ground - W_wind)
             V_air_vec = V_ground - W_in
-            V_air_mag = np.linalg.norm(V_air_vec)
+            V_air_mag = norm(V_air_vec)
             V_reg = np.sqrt(V_air_mag**2 + self.EPSILON_AIRSPEED)
             e_v = V_air_vec / V_reg # Unit vector in direction of air velocity
             
-            # Magnitude Calculations
-            CD = self.CD0 + self.K * self.CL**2 
-            L_mag = 0.5 * self.rho * self.S * self.CL * V_reg**2
+            # 1. Drag Force (Fd)
+            CD = self.CD0 + self.K * CL**2              # Induced drag depends on current CL
             D_mag = 0.5 * self.rho * self.S * CD * V_reg**2
+            F_drag = -D_mag * e_v                       # Drag opposes air velocity vector
             
-            # 1. Drag Vector: opposes air velocity
-            D_vec = -D_mag * e_v
+            # 2. Lift Force (Fl) - CRITICALLY CORRECTED
+            L_mag = 0.5 * self.rho * self.S * CL * V_reg**2
             
-            # 2. Lift Vector: perpendicular to air velocity, tilted by control inputs
-            if V_reg > 1e-3:
-                # Lift components derived from the MPC formulation (CasADi)
-                L_x = L_mag * np.sin(phi) * e_v[1] 
-                L_y = -L_mag * np.sin(phi) * e_v[0]
-                L_z = L_mag * np.cos(phi) * np.cos(alpha) 
-                L_vec = np.array([L_x, L_y, L_z])
-            else:
-                 L_vec = np.zeros(3)
+            # Lift is perpendicular to e_v. We define the vector 'perp_to_ev'
+            # that is perpendicular to e_v and in the 'vertical' plane
+            # defined by e_v and the Earth Z-axis [0, 0, 1].
             
-            # 3. Gravity Vector
-            G_vec = np.array([0.0, 0.0, -self.m * self.g])
+            # Project Z-axis onto the plane perpendicular to e_v
+            e_z = np.array([0.0, 0.0, 1.0])
+            e_L_raw = e_z - np.dot(e_z, e_v) * e_v 
             
-            # Total Force and Acceleration
-            F_total = L_vec + D_vec + G_vec
+            # Ensure lift vector direction is defined
+            L_vert_unit = e_L_raw / (norm(e_L_raw) + self.EPSILON_AIRSPEED)
+            
+            # The cross-product gives the vector perpendicular to both L_vert_unit and e_v
+            # This is the 'horizontal' or 'side' vector, used for banking
+            L_side_unit = np.cross(e_v, L_vert_unit) 
+
+            # Lift Vector: Components are rotated by the bank angle (phi)
+            F_lift = L_mag * (np.cos(phi) * L_vert_unit + np.sin(phi) * L_side_unit)
+
+            # 3. Gravity Force (Fg)
+            F_gravity = np.array([0.0, 0.0, -self.m * self.g])
+            
+            # Total Force and Acceleration (F = ma)
+            F_total = F_lift + F_drag + F_gravity
             a_vec = F_total / self.m
             
+            # X_dot = [V_ground, a_vec]
             X_dot = np.hstack((V_ground, a_vec))
             return X_dot
 
-        # --- RK4 Integration ---
-        M = 4 
+        # --- RK4 Integration (Standard Implementation) ---
+        M = 4 # Number of RK4 steps per simulation step
         dt_rk4 = dt / M
         X_k = X
         
@@ -107,3 +128,4 @@ class GliderDynamics:
         
         self.state = X_k
         return self.state
+

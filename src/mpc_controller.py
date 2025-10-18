@@ -12,70 +12,89 @@ class MPCController:
         self.config = self._load_config(config_path)
         
         # Unpack Parameters
-        self.N = self.config.get('MPC', {}).get('horizon_steps', 10)  # Prediction horizon
-        self.DT = self.config.get('MPC', {}).get('timestep', 2.0)  # Time step (seconds)
+        mpc_params = self.config.get('MPC', {})
+        self.N = mpc_params.get('horizon_steps', 40)    # Prediction horizon
+        self.DT = mpc_params.get('control_rate_s', 2.0) # Control Time step (seconds)
+        
+        # Unpack Glider/Control Limits
+        glider_limits = self.config.get('GLIDER', {})
+        self.MAX_BANK_RAD = math.radians(glider_limits.get('max_bank_angle_deg', 45.0))
+        self.CL_MIN = 0.2 # Min lift coefficient (fast, low-drag glide)
+        self.CL_MAX = 1.2 # Max lift coefficient (slow, high-lift thermal circle)
 
         # Unpack Glider parameters (for symbolic dynamics)
         glider_params = self.config.get('GLIDER', {})
-        self.m = ca.MX(glider_params.get('mass', 700.0))
+        env_params = self.config.get('ATMOSPHERE', {})
+        self.m = ca.MX(glider_params.get('mass', 20.0))
         self.S = ca.MX(glider_params.get('S', 14.0))
         self.CD0 = ca.MX(glider_params.get('CD0', 0.015))
         self.K = ca.MX(glider_params.get('K', 0.04))
-        self.CL = ca.MX(glider_params.get('CL', 0.8))
-        self.g = ca.MX(9.81)
-        self.rho = ca.MX(1.225)
+        self.g = ca.MX(env_params.get('gravity', 9.81))
+        self.rho = ca.MX(env_params.get('rho_air', 1.225))
         self.EPSILON_AIRSPEED = 1e-6
 
         # Problem Setup (State and Control Dimensions)
         self.NX = 6 # [x, y, z, vx, vy, vz]
-        self.NU = 2 # [phi, alpha] (Bank Angle, Effective Pitch Angle)
+        # CRITICAL FIX: NU is now [CL, phi]
+        self.NU = 2 # [CL, phi] (Lift Coefficient, Bank Angle in radians) 
         self.solver = self._setup_solver()
         print(f"MPC Controller initialized with N={self.N}, DT={self.DT}s.")
         
     def _load_config(self, path):
-        """Loads configuration from a YAML file for internal use."""
+        # NOTE: This should be replaced by the external config_loader.py when integrated
+        # Keeping it simple for stand-alone review
+        if not path.exists(path):
+            print(f"FATAL: Configuration file not found at {path}")
+            sys.exit(1)
         try:
             with open(path, 'r') as f:
                 return yaml.safe_load(f)
         except Exception as e:
-            print(f"FATAL: Could not load configuration file {path} in MPCController: {e}")
+            print(f"FATAL: Could not load configuration file {path}: {e}")
             sys.exit(1)
             
-    def _glider_dynamics(self, X, U, W_atm):
+    def _glider_dynamics(self, X, U, W_atm_z):
         """
         Symbolic, continuous-time state-space model (X_dot = f(X, U, W_atm)).
+        CRITICALLY: This is a symbolic replica of the fixed glider_model.py
         """
-        x, y, z, vx, vy, vz = ca.vertsplit(X)
-        phi, alpha = ca.vertsplit(U)
+        vx, vy, vz = X[3], X[4], X[5]
+        CL, phi = U[0], U[1] # CRITICAL FIX: U[0] is CL, U[1] is phi
         
         V_ground = ca.vertcat(vx, vy, vz)
-        W_in = ca.vertcat(ca.MX(0.0), ca.MX(0.0), W_atm)
+        W_in = ca.vertcat(ca.MX(0.0), ca.MX(0.0), W_atm_z)
         
         # Air velocity calculation
         V_air_vec = V_ground - W_in
         V_air_mag = ca.norm_2(V_air_vec)
         V_reg = ca.sqrt(V_air_mag**2 + self.EPSILON_AIRSPEED)
-        e_v = V_air_vec / V_reg 
+        e_v = V_air_vec / V_reg # Unit vector in direction of air velocity
         
-        # Magnitude Calculations
-        CD = self.CD0 + self.K * self.CL**2 
-        L_mag = 0.5 * self.rho * self.S * self.CL * V_reg**2
+        # 1. Drag Force (Fd)
+        CD = self.CD0 + self.K * CL**2              # Induced drag depends on control CL
         D_mag = 0.5 * self.rho * self.S * CD * V_reg**2
+        F_drag = -D_mag * e_v                       
         
-        # 1. Drag Vector: opposes air velocity
-        D_vec = -D_mag * e_v
+        # 2. Lift Force (Fl) - CORRECTED VECTOR FORMULATION
+        L_mag = 0.5 * self.rho * self.S * CL * V_reg**2
         
-        # 2. Lift Vector: perpendicular to air velocity
-        L_x = L_mag * ca.sin(phi) * e_v[1] 
-        L_y = -L_mag * ca.sin(phi) * e_v[0]
-        L_z = L_mag * ca.cos(phi) * ca.cos(alpha) 
-        L_vec = ca.vertcat(L_x, L_y, L_z)
+        e_z = ca.vertcat(0.0, 0.0, 1.0)
         
-        # 3. Gravity Vector
-        G_vec = ca.vertcat(0.0, 0.0, -self.m * self.g)
+        # Projection and perpendicular vectors
+        dot_product = ca.dot(e_z, e_v)
+        e_L_raw = e_z - dot_product * e_v 
         
-        # Total Force and Acceleration
-        F_total = L_vec + D_vec + G_vec
+        L_vert_unit = e_L_raw / (ca.norm_2(e_L_raw) + self.EPSILON_AIRSPEED)
+        L_side_unit = ca.cross(e_v, L_vert_unit) 
+
+        # Lift Vector: Components are rotated by the bank angle (phi)
+        F_lift = L_mag * (ca.cos(phi) * L_vert_unit + ca.sin(phi) * L_side_unit)
+
+        # 3. Gravity Force (Fg)
+        F_gravity = ca.vertcat(0.0, 0.0, -self.m * self.g)
+        
+        # Total Force and Acceleration (F = ma)
+        F_total = F_lift + F_drag + F_gravity
         a_vec = F_total / self.m
         
         # X_dot = [V_ground, a_vec]
@@ -88,71 +107,70 @@ class MPCController:
         opti = ca.Opti()
 
         # Decision variables
-        X = opti.variable(self.NX, self.N + 1) # State trajectory
-        U = opti.variable(self.NU, self.N)     # Control input sequence
+        X = opti.variable(self.NX, self.N + 1)
+        U = opti.variable(self.NU, self.N)
+        S_alt = opti.variable(1, self.N + 1)
         
         # Parameters
-        P_init = opti.parameter(self.NX, 1)    # Initial state
-        P_target = opti.parameter(2, 1)        # Target (thermal center [x, y])
-        P_Wz = opti.parameter(1, self.N)       # Thermal lift (Wz) over the horizon
-        
-        # Slack variable for altitude constraint violation
-        S_alt = opti.variable(1, self.N + 1)   
+        P_init = opti.parameter(self.NX, 1)
+        P_target = opti.parameter(2,1)
+        P_Wz = opti.parameter(1, self.N)# Thermal lift (Wz) over the horizon
         
         # Objective Function
         J = 0 
-        # Tuning: Hyper-survival
-        Q_dist = 0.001 # Distance cost is minimal
-        R_control = 0.1 # Smoothness is important
         
+        # Define Tuning Weights
+        W_CLIMB = 1.0     # Weight for maximizing vertical speed (Crucial for bio-inspiration)
+        W_SMOOTH = 0.01   # Weight for control smoothness/effort
+        W_DIST = 0.05     # Weight for distance to thermal center (when not fully inside)
+        W_SLACK = 10000.0 # Massive penalty on altitude violation
+
         # Cost Loop
         for k in range(self.N):
             
-            # 1. Distance to Thermal Cost (Minimize distance)
-            dist_sq = (X[0, k] - P_target[0])**2 + (X[1, k] - P_target[1])**2
-            J += Q_dist * dist_sq
+            # 1. Bio-Inspired Climbing Objective: Maximize vertical speed (vz)
+            # Minimize -vz is equivalent to maximizing vz
+            J += -W_CLIMB * X[5, k+1] # Maximize Vz at the next step (vertical velocity)
             
-            # 2. Survival Objective (Massively prioritize climbing/duration)
-            J += -50000 * X[2, k+1] # Maximize Z at the next step
+            # 2. Proximity/Centering Cost: Minimize squared distance to the thermal center
+            # This incentivizes the glider to get to the center and circle
+            dist_sq = (X[0, k] - P_target[0])**2 + (X[1, k] - P_target[1])**2
+            J += W_DIST * dist_sq
             
             # 3. Control Effort / Smoothness
-            J += R_control * ca.sumsqr(U[:, k])
+            J += W_SMOOTH * ca.sumsqr(U[:, k])
             
-            # 4. Continuity 
+            # 4. Continuity Constraint (Dynamic Model)
             X_dot = self._glider_dynamics(X[:, k], U[:, k], P_Wz[0, k])
+            # Euler Integration is used here, consider Runge-Kutta if higher fidelity needed
             opti.subject_to(X[:, k+1] == X[:, k] + self.DT * X_dot)
 
         # --- Terminal/Final State Cost (N+1 step) ---
-        J += Q_dist * ((X[0, self.N] - P_target[0])**2 + (X[1, self.N] - P_target[1])**2)
+        J += W_DIST * ((X[0, self.N] - P_target[0])**2 + (X[1, self.N] - P_target[1])**2)
         
         # --- Penalize Altitude Constraint Violation ---
-        J += 10000 * ca.sumsqr(S_alt) # Massive penalty on slack variable
+        J += W_SLACK * ca.sumsqr(S_alt)
 
         # --- Constraints ---
         
         # 1. Initial State Constraint
         opti.subject_to(X[:, 0] == P_init)
         
-        # 2. Control Bounds (Pitch/Alpha and Bank/Phi)
-        DEG_TO_RAD = math.pi / 180.0
-        opti.subject_to(opti.bounded(-45.0 * DEG_TO_RAD, U[0, :], 45.0 * DEG_TO_RAD))
-        
-        # Pitch Angle (Alpha): Max lift maneuver allowed
-        # FIX: Increased lower bound control authority for smoother, lower drag flight if needed
-        opti.subject_to(opti.bounded(-10.0 * DEG_TO_RAD, U[1, :], 20.0 * DEG_TO_RAD))
+        # 2. Control Bounds (CL and Phi)
+        opti.subject_to(opti.bounded(self.CL_MIN, U[0, :], self.CL_MAX)) # U[0] is CL
+        opti.subject_to(opti.bounded(-self.MAX_BANK_RAD, U[1, :], self.MAX_BANK_RAD)) # U[1] is Phi
         
         # 3. State Bounds
         Z_MIN = 20.0 # meters
-        opti.subject_to(X[2, :] >= Z_MIN - S_alt) 
+        opti.subject_to(X[2, :] >= Z_MIN - S_alt) # Altitude constraint with slack
         opti.subject_to(S_alt >= 0.0)
         
         # Velocity Bounds 
-        # FIX: Reverted V_MIN to 10.0 to allow for high-lift, slow-speed loitering
-        V_MIN = 10.0 # m/s 
-        V_MAX = 50.0 # m/s 
-        V_air = ca.sqrt(X[3, :]**2 + X[4, :]**2 + X[5, :]**2)
-        opti.subject_to(V_air >= V_MIN)
-        opti.subject_to(V_air <= V_MAX)
+        V_MIN = 10.0 # m/s (Stall prevention)
+        V_MAX = 50.0 # m/s (Structural limit)
+        V_air_sq = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
+        opti.subject_to(V_air_sq >= V_MIN**2)
+        opti.subject_to(ca.sqrt(V_air_sq) <= V_MAX)
 
         # Optimization Setup
         opti.minimize(J)
@@ -164,7 +182,6 @@ class MPCController:
                 'print_level': 0, 
                 'acceptable_tol': 1e-6,
                 'acceptable_obj_change_tol': 1e-4,
-                # FIX: Relaxing tolerance to 1e-3 to help solve the stability issue and converge
                 'tol': 1e-3, 
             },
             'print_time': 0,
@@ -172,9 +189,14 @@ class MPCController:
         opti.solver('ipopt', opts)
 
         # Map optimization variables to a CasADi function for execution
+        # P = [P_init, P_target, P_Wz]
         P = ca.vertcat(P_init, P_target, ca.reshape(P_Wz, self.N, 1))
         U_out = ca.vertcat(U)
         
+        # Setup initial guess for states (needed for IPOPT stability)
+        # opti.set_initial(X, ca.repmat(P_init, 1, self.N + 1))
+        
+        # Return the solver function
         return opti.to_function('solver', [P], [U_out])
 
     def solve_mpc(self, initial_state, thermal_center, Wz_prediction):
@@ -185,15 +207,21 @@ class MPCController:
         P_target = np.array([thermal_center[0], thermal_center[1]])
         P_Wz = Wz_prediction.flatten()
         
+        # Concatenate parameters into a single vector P_all
         P_all = np.concatenate([initial_state, P_target, P_Wz])
         
         try:
+            # Set initial guess for U to zero or previous solution if available
+            # U_guess = np.zeros((self.NU * self.N, 1)) 
+            
             U_flat = self.solver(P_all)
             U_optimal = np.array(U_flat).reshape(self.NU, self.N)
             
+            # Return the first step control inputs: [CL_command, phi_command]
             return U_optimal[:, 0] 
         
         except Exception as e:
-            print(f"\nWARNING: IPOPT failed to converge. Returning last known successful control input.")
-            return np.array([0.0, 0.0])
-
+            # Fallback to safe gliding (low CL, 0 bank)
+            print(f"\nWARNING: IPOPT failed to converge: {e}. Returning safe glide command.")
+            # Safe glide: Moderate CL (0.8), zero bank
+            return np.array([0.8, 0.0])

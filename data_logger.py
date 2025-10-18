@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import math # Use math.degrees for clarity if available
 
 class DataLogger:
     """
@@ -8,32 +9,45 @@ class DataLogger:
     def __init__(self):
         # Initialize an empty list to store dictionary entries for each time step
         self.data_entries = []
+        # CRITICAL FIX: Columns aligned with 6D state and [CL, Phi] control
         self.columns = [
-            'Time', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'm', 
-            'phi_cmd', 'gamma_cmd', 'thermal_wz', 'dist_to_thermal'
+            'time', 'x', 'y', 'z', 'vx', 'vy', 'vz', 
+            'CL_cmd', 'phi_cmd', 'Wz', 'dist_to_center'
         ]
 
     def log_step(self, t, state, control, thermal_wz, dist_to_thermal):
         """
         Logs the state and control at a specific time step.
+        Control input 'control' is [CL_command, phi_command (rad)]
         """
         # Ensure inputs are flat numpy arrays for consistent logging
         state = np.array(state).flatten()
         control = np.array(control).flatten()
         
+        # Check state dimension integrity
+        if len(state) != 6:
+             raise ValueError(f"State vector must be 6D, but got {len(state)} dimensions.")
+        
+        # CRITICAL FIX: Correct mapping of control and state indices
         entry = {
-            'Time': t,
+            'time': t,
             'x': state[0],
             'y': state[1],
             'z': state[2],
             'vx': state[3],
             'vy': state[4],
             'vz': state[5],
-            'm': state[6],
-            'phi_cmd': np.rad2deg(control[0]), # Log in degrees for readability
-            'gamma_cmd': np.rad2deg(control[1]),
-            'thermal_wz': thermal_wz,
-            'dist_to_thermal': dist_to_thermal
+            
+            # CRITICAL FIX: Log CL directly (no degree conversion)
+            'CL_cmd': control[0], 
+            
+            # CRITICAL FIX: Log Phi in radians to match the simulator, or degrees for analysis
+            # We will log in radians, and let the plotter convert to degrees for consistency with main_simulation.py
+            'phi_cmd': control[1], 
+            
+            # CRITICAL FIX: Consistent naming with main_simulation and plotter
+            'Wz': thermal_wz, 
+            'dist_to_center': dist_to_thermal
         }
         self.data_entries.append(entry)
 
@@ -46,11 +60,12 @@ class DataLogger:
             print("No data logged. Simulation likely crashed immediately.")
             return
 
+        # Ensure the DataFrame is created with the correct, standardized column names
         df = pd.DataFrame(self.data_entries)
         
         # --- Print Simulation Summary ---
         print("\n" + "="*80)
-        print("                       GLIDER SIMULATION FLIGHT SUMMARY")
+        print("                       BIO-INSPIRED GLIDER FLIGHT SUMMARY")
         print("="*80)
         
         # Key performance indicators
@@ -58,19 +73,26 @@ class DataLogger:
         max_z = df['z'].max()
         min_z = df['z'].min()
         
-        print(f"Total Simulation Time: {df['Time'].iloc[-1]:.1f} seconds")
+        print(f"Total Simulation Time: {df['time'].iloc[-1]:.1f} seconds")
         print(f"Initial Altitude (m): {df['z'].iloc[0]:.2f}")
         print(f"Final Altitude (m): {final_z:.2f}")
-        print(f"Max Altitude Reached (m): {max_z:.2f}")
+        print(f"Max Altitude Reached (m): {max_z:.2f} 🚀")
         print(f"Min Altitude (m): {min_z:.2f}")
         print(f"Total Altitude Change (m): {final_z - df['z'].iloc[0]:.2f}")
         print("-" * 80)
         
+        # Convert phi_cmd to degrees for the summary printout
+        df_summary = df.copy()
+        if 'phi_cmd' in df_summary.columns:
+             df_summary['phi_cmd (deg)'] = np.degrees(df_summary['phi_cmd'])
+             df_summary = df_summary.drop(columns=['phi_cmd'])
+             df_summary = df_summary.rename(columns={'CL_cmd': 'CL_cmd'})
+        
         # Print the first and last 5 steps for quick inspection
         print("Sampled Trajectory Data (First 5 Steps):")
-        print(df.head().to_markdown(index=False, floatfmt=".2f"))
+        print(df_summary.head().to_markdown(index=False, floatfmt=".2f"))
         print("\nSampled Trajectory Data (Last 5 Steps):")
-        print(df.tail().to_markdown(index=False, floatfmt=".2f"))
+        print(df_summary.tail().to_markdown(index=False, floatfmt=".2f"))
         print("="*80)
         
         # For deeper debugging, save the full dataframe to an instance variable

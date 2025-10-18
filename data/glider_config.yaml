@@ -1,26 +1,45 @@
-# --- GLIDER PARAMETERS ---
+# ----------------------------------------------------------------------
+# Bio-Inspired Autonomous Glider Control System - Configuration File
+# ----------------------------------------------------------------------
+
+# --- GLIDER PHYSICAL PARAMETERS (A high-performance sailplane example) ---
 GLIDER:
-  # FINAL FIX: Glider mass set to 20.0kg for high efficiency and physically feasible thermal capture.
-  mass: 20.0        # Glider mass (kg) 
-  S: 14.0            # Wing surface area (m^2)
-  CL: 0.8            # Coefficient of Lift (average for flight envelope)
-  CD0: 0.015         # Parasitic Drag Coefficient
-  K: 0.04            # Induced Drag Factor
+  mass: 20.0             # Glider mass (kg) 
+  S: 14.0                # Wing reference area (m^2)
+  CL_avg: 0.8            # Average Coefficient of Lift (dimensionless)
+  CD0: 0.015             # Parasitic Drag Coefficient (dimensionless)
+  K: 0.04                # Induced Drag Factor (dimensionless)
+  
+  # For the controller/optimizer: Maximum control authority
+  max_bank_angle_deg: 45.0 # Max bank angle limit (degrees)
+  max_pitch_angle_deg: 10.0 # Max pitch angle limit (degrees, for dive/climb)
 
-# --- SIMULATION PARAMETERS ---
+# --- SIMULATION PARAMETERS (Defines the numerical integration speed) ---
 SIMULATION:
-  max_time: 120.0    # Maximum simulation time (s)
-  time_step: 0.2     # Simulation time step (s)
-  initial_state: [0.0, 0.0, 400.0, 20.0, 0.0, 0.0]  # [x, y, z, vx, vy, vz]
+  max_time: 120.0        # Maximum simulation time (s)
+  time_step_s: 0.2       # Core numerical integration step (s)
+  
+  # Initial state: [x, y, z, vx, vy, vz]
+  initial_state: [0.0, 0.0, 400.0, 20.0, 0.0, 0.0] 
 
-# --- ATMOSPHERIC MODEL PARAMETERS (Thermal centered at 500, 500) ---
+# --- ATMOSPHERIC MODEL PARAMETERS (Thermal centered at 500m, 500m) ---
 ATMOSPHERE:
-  thermal_center_x: 500.0
-  thermal_center_y: 500.0
-  thermal_radius: 150.0
-  max_vertical_speed: 3.0
+  rho_air: 1.225         # Air density (kg/m^3) - Standard sea level
+  gravity: 9.81          # Gravitational acceleration (m/s^2)
+  
+  THERMAL:
+    center_x: 500.0      # Thermal center X coordinate (m)
+    center_y: 500.0      # Thermal center Y coordinate (m)
+    radius: 150.0        # Thermal radius (m)
+    max_vertical_speed: 3.0 # Maximum vertical air speed (m/s)
 
-# --- MPC PARAMETERS ---
+# --- MPC CONTROLLER PARAMETERS (Defines the control loop speed and planning depth) ---
 MPC:
-  horizon_steps: 10  # N
-  timestep: 2.0      # DT (s)
+  # CRITICAL IMPROVEMENT: Increased horizon for better thermal planning
+  horizon_steps: 40      # N - Number of steps in the prediction horizon (CRUCIAL CHANGE)
+  
+  # IMPORTANT: This must be an integer multiple of SIMULATION:time_step_s
+  control_rate_s: 2.0    # DT - Time between control updates (s)
+  
+  # The number of simulation steps per control iteration (must be an integer)
+  steps_per_control_iter: 10
