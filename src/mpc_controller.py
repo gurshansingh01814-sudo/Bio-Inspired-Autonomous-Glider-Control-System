@@ -176,11 +176,15 @@ class MPCController:
             
         # --- 4. Bounds and Constraints (Inequality Constraints) ---
         
+        # --- CRITICAL FIX: CONVERT DEGREES TO RADIANS MANUALLY ---
+        DEG_TO_RAD = ca.pi / 180.0
+        
         # Control Bounds:
         # Bank Angle (phi): +/- 45 degrees
-        opti.subject_to(opti.bounded(-ca.pi/4, U[0, :], ca.pi/4)) 
+        opti.subject_to(opti.bounded(-45.0 * DEG_TO_RAD, U[0, :], 45.0 * DEG_TO_RAD)) 
         # Effective Pitch (alpha): Lift-generating range (-5 to +10 degrees)
-        opti.subject_to(opti.bounded(-ca.deg(5), U[1, :], ca.deg(10)))
+        opti.subject_to(opti.bounded(-5.0 * DEG_TO_RAD, U[1, :], 10.0 * DEG_TO_RAD))
+        # --------------------------------------------------------
 
         # State Bounds:
         # Altitude Constraint (z must be > MIN_ALTITUDE)
@@ -270,4 +274,3 @@ class MPCController:
             
             # For this critical failure, we return a safe-glide command (e.g., 0 bank, 0 pitch)
             return np.array([0.0, 0.0]) 
-
