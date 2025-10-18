@@ -1,143 +1,138 @@
 import numpy as np
-import yaml
 import time
 import os
-import sys
-import datetime
 import pandas as pd
+import sys
 
-# CRITICAL: Ensure these imports point to the correct files.
+# Assume the necessary classes are now correctly imported from src/
+# Adjust imports based on your actual project structure if necessary
 try:
+    from src.glider_dynamics import GliderDynamics
     from src.mpc_controller import MPCController
-    # Assuming GliderDynamics and Thermal classes are defined or imported from files
-    from src.glider_dynamics import GliderDynamics 
-    from src.atmospheric_model import AtmosphericModel as Thermal 
+    from src.atmospheric_model import AtmosphericModel
 except ImportError as e:
-    print(f"FATAL: Missing a required class import: {e}")
-    print("If imports fail, ensure you are running the script using: python -m sim.main_simulation")
+    print(f"Error importing modules: {e}")
     sys.exit(1)
 
 
 class GliderControlSystem:
-    # --- Configuration Paths ---
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    # Path is now correctly set to 'data'
-    CONFIG_PATH = os.path.join(BASE_DIR, 'data', 'glider_config.yaml') 
+    """
+    Manages the complete simulation, integrating the glider dynamics, 
+    the atmospheric model, and the MPC controller.
+    """
 
-    def __init__(self):
-        print(f"Attempting to load config from: {self.CONFIG_PATH}")
+    def __init__(self, config_path='./data/glider_config.yaml'):
+        # Initialize sub-systems
+        self.config_path = config_path
+        self.glider = GliderDynamics(config_path)
+        self.thermal = AtmosphericModel(config_path)
+        self.mpc = MPCController(config_path)
         
-        # --- NOTE: self.config is only loaded here for printing/debug purposes in this class ---
-        # The components (GliderDynamics, Thermal, MPCController) will load the config internally.
-        self.config = self._load_config(self.CONFIG_PATH) 
-
-        # --- Initialization of Components (CRITICAL FIX APPLIED HERE) ---
-        # FIX: Pass the file path string (self.CONFIG_PATH) instead of the dict (self.config)
-        self.glider = GliderDynamics(self.CONFIG_PATH) 
-        self.thermal = Thermal(self.CONFIG_PATH)
-        self.mpc = MPCController(self.CONFIG_PATH) 
+        # Simulation parameters (from config or defaults)
+        self.T_end = 200.0  # Total simulation time
+        self.dt_sim = 0.5   # Simulation time step (for integration)
+        self.dt_mpc = self.mpc.DT # MPC control frequency (2.0s)
+        self.T_end = 200.0
         
-        # Data logging initialization
-        self.results = []
-        self.last_results_path = None
+        # Calculate maximum number of steps
+        self.max_steps = int(self.T_end / self.dt_sim)
+        self.mpc_update_freq = int(self.dt_mpc / self.dt_sim)
         
+        self.flight_data = []
         print("System initialized successfully.")
 
-    def _load_config(self, path):
-        """Loads configuration from a YAML file. Used only for GliderControlSystem's internal reference."""
-        try:
-            with open(path, 'r') as f:
-                return yaml.safe_load(f)
-        except Exception as e:
-            # FATAL: Configuration loading failure
-            print(f"FATAL: Could not load configuration file {path}: {e}")
-            sys.exit(1)
-
-    # --- MAIN LOOP ---
     def main_loop(self):
-        T_end = 400.0
-        DT = self.mpc.DT 
+        """Runs the main time-stepping simulation."""
         
-        current_state = self.glider.get_state()
         print("Starting simulation loop...")
-
+        
+        T_end = self.T_end
+        dt_sim = self.dt_sim
+        current_state = self.glider.get_state()
         t = 0.0
         
+        # Placeholder for previous control inputs (used if IPOPT fails)
+        last_u_star = np.array([0.0, 0.0])
+
         while t < T_end:
             
-            # --- MPC Step ---
-            thermal_center = np.array([self.thermal.center_x, self.thermal.center_y])
-            thermal_radius = self.thermal.radius
+            # Unpack state
+            x, y, z, vx, vy, vz = current_state
             
-            u_star = self.mpc.compute_control(current_state, thermal_center, thermal_radius)
-            phi_command, alpha_command = u_star[0], u_star[1]
-            
-            # --- Logging Data ---
-            current_state_list = current_state.tolist()
-            self.results.append({
-                'time': t,
-                'x': current_state_list[0],
-                'y': current_state_list[1],
-                'z': current_state_list[2],
-                'vx': current_state_list[3],
-                'vy': current_state_list[4],
-                'vz': current_state_list[5],
-                'phi': phi_command,
-                'alpha': alpha_command,
-                'Wz': self.thermal.get_thermal_lift(current_state[0], current_state[1], current_state[2]),
-                'dist_to_center': np.sqrt((current_state[0] - self.thermal.center_x)**2 + (current_state[1] - self.thermal.center_y)**2)
-            })
-
-            # --- Dynamics Step ---
-            next_state = self.glider.update(phi_command, alpha_command, DT, self.thermal)
-            current_state = next_state
-            t += DT
-
-            # Print status update
-            airspeed = np.linalg.norm(current_state[3:])
-            print(f"T={t:.1f}s | Alt={current_state[2]:.2f}m | Airspeed={airspeed:.2f}m/s | Wz={self.results[-1]['Wz']:.2f}m/s | Dist={self.results[-1]['dist_to_center']:.1f}m")
-            
-            # Exit conditions
-            if current_state[2] <= 5.0:
-                print("\n--- LANDING / CRASH: Minimum altitude reached. Simulation terminated. ---")
+            # Check for crash condition
+            if z <= self.mpc.config.get('CONSTRAINTS', {}).get('Z_MIN', 20.0):
+                print(f"\n--- LANDING / CRASH: Minimum altitude reached. Simulation terminated. ---")
                 break
+                
+            # --- MPC Control Update (Run every dt_mpc seconds) ---
+            if (t * 100) % (self.dt_mpc * 100) < (self.dt_sim * 100):
+                
+                thermal_center = np.array([self.thermal.center_x, self.thermal.center_y])
+                thermal_radius = self.thermal.radius
+                
+                # Wz prediction (Simplified: Assume Wz is constant 0 across the horizon for now)
+                Wz_prediction = np.zeros((1, self.mpc.N)) 
+
+                # CRITICAL FIX: Changed method name to the correct solve_mpc
+                u_star = self.mpc.solve_mpc(current_state, thermal_center, Wz_prediction) 
+                
+                # Check if solver failed (solve_mpc returns [0, 0] on failure)
+                if np.allclose(u_star, np.array([0.0, 0.0])):
+                    phi_command, alpha_command = last_u_star
+                else:
+                    phi_command, alpha_command = u_star[0], u_star[1]
+                    last_u_star = u_star
+            else:
+                # Maintain last commanded input if not in MPC step
+                phi_command, alpha_command = last_u_star
+
+            # --- Dynamics Integration (Run every dt_sim seconds) ---
+            new_state = self.glider.update(phi_command, alpha_command, dt_sim, self.thermal)
+            current_state = new_state
+            t += dt_sim
             
-            if self.results[-1]['dist_to_center'] > 1000:
-                print("\n--- Too far from thermal. Simulation terminated. ---")
-                break
+            # Calculate metrics
+            airspeed = np.linalg.norm(current_state[3:6])
+            w_z = self.thermal.get_thermal_lift(current_state[0], current_state[1], current_state[2])
+            dist_to_thermal = np.linalg.norm(current_state[0:2] - np.array([self.thermal.center_x, self.thermal.center_y]))
+            
+            # Log data
+            self.flight_data.append([
+                t, current_state[0], current_state[1], current_state[2], 
+                airspeed, w_z, dist_to_thermal, phi_command, alpha_command
+            ])
 
-        self.save_results()
+            # Print status every 2.0 seconds
+            if (t * 10) % 20 == 0:
+                print(f"T={t:.1f}s | Alt={z:.2f}m | Airspeed={airspeed:.2f}m/s | Wz={w_z:.2f}m/s | Dist={dist_to_thermal:.1f}m")
 
+        self._save_results()
 
-    def save_results(self):
-        """Saves the recorded flight data to a timestamped CSV file."""
-        if not hasattr(self, 'results') or not self.results:
-            return
-
-        results_dir = os.path.join(self.BASE_DIR, 'results')
-        os.makedirs(results_dir, exist_ok=True)
+    def _save_results(self):
+        """Saves the simulation data to a CSV file."""
+        df = pd.DataFrame(self.flight_data, columns=[
+            'Time', 'X', 'Y', 'Z', 'Airspeed', 'Wz_Atmosphere', 'Dist_to_Thermal', 'Phi_Command', 'Alpha_Command'
+        ])
         
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filepath = os.path.join(results_dir, f"flight_data_{timestamp}.csv")
-        
-        df = pd.DataFrame(self.results)
+        output_dir = './results'
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+            
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(output_dir, f"flight_data_{timestamp}.csv")
         df.to_csv(filepath, index=False)
+        
         print(f"\nSimulation results saved to: {filepath}")
-        self.last_results_path = filepath
+        print("Simulation successful. Run 'python scripts/plot_results.py' to visualize the flight data stored in the file.")
 
 
 if __name__ == '__main__':
-    # Ensure dependencies are available for data logging
-    try:
-        import pandas as pd
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print("ERROR: Please run 'pip install pandas matplotlib' to enable data logging and plotting.")
-        sys.exit(1)
-        
-    system = GliderControlSystem()
+    # Determine the configuration path relative to the current working directory
+    # Assumes config file is always available relative to the project root
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    config_path = os.path.join(project_root, 'data', 'glider_config.yaml')
+    
+    # Initialize and run the system
+    system = GliderControlSystem(config_path)
     system.main_loop()
-
-    if hasattr(system, 'last_results_path') and system.last_results_path:
-        # Inform the user how to plot the data
-        print(f"\nSimulation successful. Run 'python scripts/plot_results.py' to visualize the flight data stored in {system.last_results_path}")
