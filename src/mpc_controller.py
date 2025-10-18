@@ -138,11 +138,11 @@ class MPCController:
         J = 0 
         
         # Define Tuning Weights
-        W_CLIMB = 10.0     # <-- CHANGED: Decreased to prioritize centering
-        W_SMOOTH = 50.0    # <-- REMAINS: High for initial stability
-        W_DIST = 15.0      # <-- CHANGED: Increased to enforce tighter circling
+        W_CLIMB = 200.0     
+        W_SMOOTH = 50.0    
+        W_DIST = 15.0      
         W_SLACK = 5000.0 
-        W_AIRSPEED = 50.0   
+        W_AIRSPEED = 500.0   
 
         # Cost Loop and Step-wise Constraints
         for k in range(self.N):
