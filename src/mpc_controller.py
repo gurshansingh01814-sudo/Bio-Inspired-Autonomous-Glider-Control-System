@@ -22,7 +22,7 @@ class MPCController:
         self.MAX_BANK_RAD = 0.523599
         self.CL_MIN = 0.4 # Min lift coefficient (fast, low-drag glide)
         self.CL_MAX = 1.2 # Max lift coefficient (slow, high-lift thermal circle)
-        self.V_MIN = 6.0 # m/s  <-- CHANGED to a safer minimum stall speed (was 1.0)
+        self.V_MIN = 7.0 # m/s  <-- CHANGED to a safer minimum stall speed (was 1.0)
 
         # Unpack Glider parameters (for symbolic dynamics)
         glider_params = self.config.get('GLIDER', {})
@@ -133,7 +133,7 @@ class MPCController:
         
         # Define Tuning Weights
         W_CLIMB = 20.0     
-        W_SMOOTH = 25.0     
+        W_SMOOTH = 50.0     
         W_DIST = 8.0     
         W_SLACK = 5000.0 
         W_AIRSPEED = 100.0   
