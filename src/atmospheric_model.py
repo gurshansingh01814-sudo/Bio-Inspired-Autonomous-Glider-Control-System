@@ -10,21 +10,37 @@ class AtmosphericModel:
         
         self.config = self._load_config(config_path)
         
-        # Load Thermal parameters
-        thermal_params = self.config.get('THERMAL', {})
-        self.thermal_center = np.array(thermal_params.get('center', [700.0, 0.0])) 
-        self.thermal_radius = thermal_params.get('radius', 100.0) 
-        self.W_z_max = thermal_params.get('max_lift', 4.0) 
+        # Load the main ATMOSPHERE section first
+        env_params = self.config.get('ATMOSPHERE', {})
+        
+        # --- FIX 1: Access the nested THERMAL section correctly ---
+        thermal_params = env_params.get('THERMAL', {})
+        
+        # --- FIX 2 & 3: Map config keys to instance attributes correctly ---
+        # The thermal center is now constructed from the separate X and Y keys
+        center_x = thermal_params.get('center_x', 500.0)
+        center_y = thermal_params.get('center_y', 500.0)
+        self.thermal_center = np.array([center_x, center_y])
+        
+        self.thermal_radius = thermal_params.get('radius', 150.0)
+        # Match 'max_vertical_speed' from config to the W_z_max attribute
+        self.W_z_max = thermal_params.get('max_vertical_speed', 3.0) 
         
         # Load other environment params
-        env_params = self.config.get('ATMOSPHERE', {})
         self.rho = env_params.get('rho_air', 1.225)
         
     def _load_config(self, path):
         """Loads configuration from a YAML file for internal use."""
         if not os.path.exists(path):
-            print(f"FATAL: Configuration file not found at {path}")
-            sys.exit(1)
+            # Fallback path logic in case the file is run from a different directory
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            fallback_path = os.path.join(base_dir, '..', path) # Assumes config is one level up
+            if os.path.exists(fallback_path):
+                path = fallback_path
+            else:
+                print(f"FATAL: Configuration file not found at {path} or {fallback_path}")
+                sys.exit(1)
+                
         try:
             with open(path, 'r') as f:
                 return yaml.safe_load(f)
@@ -39,8 +55,7 @@ class AtmosphericModel:
     def get_thermal_lift(self, x, y, z):
         """
         Calculates the vertical wind (Wz) at a given (x, y, z) location using
-        a smooth, conical lift profile. Lift is strongest at the center and 
-        drops linearly to zero at the edge.
+        a smooth, conical lift profile.
         """
         # Calculate horizontal distance to the thermal center
         dx = x - self.thermal_center[0]
@@ -53,9 +68,7 @@ class AtmosphericModel:
             lift_factor = 1.0 - (horizontal_distance / self.thermal_radius)
             Wz = self.W_z_max * lift_factor
             
-            # Altitude Factor (Optional but helpful for realism)
-            # You can add logic here if lift fades with altitude, e.g., lift * (1 - z/z_max)
-            
+            # Note: The altitude factor is omitted, assuming lift is constant for simplicity.
             return Wz
         else:
-            return 0.0 # No lift outside the thermal radius 
+            return 0.0 # No lift outside the thermal radius
