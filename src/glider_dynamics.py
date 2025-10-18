@@ -89,6 +89,8 @@ class GliderDynamics:
             # Project Z-axis onto the plane perpendicular to e_v
             e_z = np.array([0.0, 0.0, 1.0])
             e_L_raw = e_z - np.dot(e_z, e_v) * e_v 
+             
+            EPSILON_LIFT = 1e-4
             
             # Ensure lift vector direction is defined
             L_vert_unit = e_L_raw / (norm(e_L_raw) + self.EPSILON_AIRSPEED)
