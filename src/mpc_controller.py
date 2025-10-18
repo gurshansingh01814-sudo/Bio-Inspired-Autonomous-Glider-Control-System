@@ -21,7 +21,7 @@ class MPCController:
         glider_limits = self.config.get('GLIDER', {})
         self.MAX_BANK_RAD = math.radians(glider_limits.get('max_bank_angle_deg', 45.0))
         self.CL_MIN = 0.2 # Min lift coefficient (fast, low-drag glide)
-        self.CL_MAX = 1.2 # Max lift coefficient (slow, high-lift thermal circle)
+        self.CL_MAX = 1.4 # Max lift coefficient (slow, high-lift thermal circle)
 
         # Unpack Glider parameters (for symbolic dynamics)
         glider_params = self.config.get('GLIDER', {})
@@ -157,7 +157,7 @@ class MPCController:
         opti.subject_to(X[:, 0] == P_init)
         
         # Control Bounds (CL and Phi)
-        opti.subject_to(opti.bounded(self.CL_MIN, U[0, :], self.CL_MAX)) # U[0] is CL
+        opti.subject_to(opti.bounded(self.CL_MIN, U[0.4, :], self.CL_MAX)) # U[0] is CL
         opti.subject_to(opti.bounded(-self.MAX_BANK_RAD, U[1, :], self.MAX_BANK_RAD)) # U[1] is Phi
         
         # State Bounds
@@ -203,7 +203,7 @@ class MPCController:
         
         # 2. Control Guess (U_guess): Fixed Feasible Values (DM)
         MODERATE_BANK_RAD = math.radians(15.0) 
-        MODERATE_CL = 0.7 
+        MODERATE_CL = 0.5 
         U_safe = ca.DM([[MODERATE_CL], [MODERATE_BANK_RAD]]) 
         
         U_guess = ca.repmat(U_safe, 1, self.N) 
