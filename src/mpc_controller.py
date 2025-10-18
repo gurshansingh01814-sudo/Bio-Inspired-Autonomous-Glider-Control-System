@@ -22,7 +22,7 @@ class MPCController:
         self.MAX_BANK_RAD = 0.523599
         self.CL_MIN = 0.4 # Min lift coefficient (fast, low-drag glide)
         self.CL_MAX = 1.2 # Max lift coefficient (slow, high-lift thermal circle)
-        self.V_MIN = 7.0 # m/s  <-- NEW TARGET MINIMUM (Changed from 6.0)
+        self.V_MIN = 6.5 # m/s  <-- NEW TARGET MINIMUM (Changed from 6.0)
 
         # New parameter for Soft Constraint
         self.W_STALL = 20000.0 # Extremely high weight for V_MIN violation penalty
