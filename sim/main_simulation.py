@@ -10,8 +10,8 @@ import pandas as pd
 try:
     from src.mpc_controller import MPCController
     # Assuming GliderDynamics and Thermal classes are defined or imported from files
-    from sim.glider_dynamics import GliderDynamics 
-    from sim.thermal_model import Thermal 
+    from src.glider_dynamics import GliderDynamics 
+    from src.atmospheric_model import AtmosphericModel as Thermal 
 except ImportError as e:
     print(f"FATAL: Missing a required class import: {e}")
     # If the above fails, you might need to adjust your system's Python path or the import style
