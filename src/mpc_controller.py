@@ -115,7 +115,7 @@ class MPCController:
         # Parameters
         P_init = opti.parameter(self.NX, 1)
         P_target = opti.parameter(2, 1) 
-        P_Wz = opti.parameter(1, self.N) # Thermal lift (Wz) over the horizon
+        P_Wz = opti.parameter(1, self.N)  # Thermal lift (Wz) over the horizon
         
         # Objective Function
         J = 0 
@@ -166,18 +166,18 @@ class MPCController:
         opti.subject_to(V_air_sq >= V_MIN**2)
         opti.subject_to(ca.sqrt(V_air_sq) <= V_MAX)
         
-        # --- CRITICAL FIX: Symbolic Warm Start / Initial Guess ---
-        # Solves the "MX object has no attribute 'full'" error and ensures feasibility.
+        # --- CRITICAL FIX: Numerical Warm Start (DM) for MX variables ---
+        # This uses the set_initial(MX, DM) prototype, which is robust.
         
-        # 1. State Guess (X_guess): Repeat the initial state (P_init) across the entire horizon (N+1 steps)
-        X_guess = ca.repmat(P_init, 1, self.N + 1)
+        # 1. State Guess (X_guess): Zero Matrix (DM)
+        X_guess = ca.DM.zeros(self.NX, self.N + 1)
         
-        # 2. Control Guess (U_guess): Repeat the feasible control [CL_MIN, 0.0] across the horizon (N steps)
-        U_safe = ca.vertcat(ca.DM(self.CL_MIN), ca.DM(0.0)) # Numerical safe control vector
-        U_guess = ca.repmat(U_safe, 1, self.N)
+        # 2. Control Guess (U_guess): Fixed Feasible Values (DM)
+        U_safe = ca.DM([[self.CL_MIN], [0.0]]) # [CL_MIN, 0.0] as a column vector
+        U_guess = ca.repmat(U_safe, 1, self.N) # Tile the safe value across the horizon (results in a DM)
         
-        opti.set_initial(X, X_guess)
-        opti.set_initial(U, U_guess)
+        opti.set_initial(X, X_guess) 
+        opti.set_initial(U, U_guess) 
         opti.set_initial(S_alt, 0.0) 
         # ------------------------------------------------
 
