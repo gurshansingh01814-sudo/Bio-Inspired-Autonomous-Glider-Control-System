@@ -26,7 +26,8 @@ class MPCController:
         self.CL = glider_params.get('CL', 0.8) # Constant Lift Coefficient
         
         mpc_params = self.config.get('MPC', {})
-        self.N = mpc_params.get('HORIZON_STEPS', 20)
+        # CRITICAL FIX: Reduce prediction horizon (N) for faster solve time
+        self.N = 15 # Reduced from 20 to 15
         self.DT = mpc_params.get('PREDICT_DT', 1.0)
         self.Q_x = np.diag(mpc_params.get('STATE_WEIGHTS', [10.0, 10.0, 1.0, 0.1, 0.1, 0.1]))
         self.R_u = np.diag(mpc_params.get('CONTROL_WEIGHTS', [0.1, 0.1]))
@@ -197,8 +198,8 @@ class MPCController:
                 'print_level': 0, 
                 'acceptable_tol': 1e-6, 
                 'acceptable_obj_change_tol': 1e-6,
-                # CRITICAL FIX: Increase max CPU time further (near DT limit)
-                'max_cpu_time': 0.9, # Increased from 0.5 to 0.9 seconds (DT=1.0s)
+                # Retain the aggressive CPU limit, as N is now smaller
+                'max_cpu_time': 0.9, 
             },
             'print_time': False,
         }
