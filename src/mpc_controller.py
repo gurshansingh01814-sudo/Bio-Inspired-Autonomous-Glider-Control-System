@@ -22,7 +22,10 @@ class MPCController:
         self.MAX_BANK_RAD = 0.523599
         self.CL_MIN = 0.4 # Min lift coefficient (fast, low-drag glide)
         self.CL_MAX = 1.2 # Max lift coefficient (slow, high-lift thermal circle)
-        self.V_MIN = 7.0 # m/s  <-- CHANGED to a safer minimum stall speed (was 1.0)
+        self.V_MIN = 7.0 # m/s  <-- NEW TARGET MINIMUM (Changed from 6.0)
+
+        # New parameter for Soft Constraint
+        self.W_STALL = 20000.0 # Extremely high weight for V_MIN violation penalty <-- NEW
 
         # Unpack Glider parameters (for symbolic dynamics)
         glider_params = self.config.get('GLIDER', {})
@@ -118,9 +121,9 @@ class MPCController:
         X = opti.variable(self.NX, self.N + 1)
         U = opti.variable(self.NU, self.N)
         S_alt = opti.variable(1, self.N + 1) # Slack for altitude constraint
+        S_stall = opti.variable(1, self.N + 1) # <-- NEW: Slack for stall constraint
         
         # V_air_sq is a symbolic expression defined over all N+1 steps
-        # NOTE: This is the ground speed squared, which is used for the V_air_sq cost.
         V_air_sq_ground = X[3, :]**2 + X[4, :]**2 + X[5, :]**2
 
         # Parameters
@@ -133,10 +136,10 @@ class MPCController:
         
         # Define Tuning Weights
         W_CLIMB = 20.0     
-        W_SMOOTH = 50.0     
+        W_SMOOTH = 50.0     # <-- NEW WEIGHT (Changed from 25.0)
         W_DIST = 8.0     
         W_SLACK = 5000.0 
-        W_AIRSPEED = 100.0   
+        W_AIRSPEED = 50.0   # <-- NEW WEIGHT (Changed from 100.0)
 
         # Cost Loop and Step-wise Constraints
         for k in range(self.N):
@@ -157,7 +160,7 @@ class MPCController:
             X_dot = self._glider_dynamics(X[:, k], U[:, k], P_Wz[0, k])
             opti.subject_to(X[:, k+1] == X[:, k] + self.DT * X_dot)
 
-            # --- CRITICAL FIX: Minimum Airspeed Constraint (Applied to Airspeed V_air_sq_k) ---
+            # --- CRITICAL FIX: Soft Minimum Airspeed Constraint (Applied to Airspeed V_air_sq_k) ---
             
             vx, vy, vz = X[3, k], X[4, k], X[5, k]
             W_atm_z = P_Wz[0, k]
@@ -167,10 +170,14 @@ class MPCController:
             V_air_vec = V_ground - W_in
             V_air_sq_k = ca.sumsqr(V_air_vec) # Airspeed squared at step k
 
-            # Enforce minimum air velocity squared (HARD CONSTRAINT)
-            opti.subject_to(V_air_sq_k >= self.V_MIN**2)
+            # 1. Enforce minimum air velocity squared using slack (Soft Constraint)
+            opti.subject_to(V_air_sq_k >= self.V_MIN**2 - S_stall[0, k])
+            opti.subject_to(S_stall[0, k] >= 0.0)
             
-            # Enforce maximum air velocity squared (HARD CONSTRAINT)
+            # 2. Add high penalty to the objective function for any violation
+            J += self.W_STALL * S_stall[0, k] # <-- NEW COST TERM
+
+            # Enforce maximum air velocity squared (Hard Constraint remains)
             V_MAX = 50.0
             opti.subject_to(V_air_sq_k <= V_MAX**2) 
             
@@ -180,6 +187,7 @@ class MPCController:
         # --- Terminal/Final State Cost (N+1 step) ---
         J += W_DIST * ((X[0, self.N] - P_target[0])**2 + (X[1, self.N] - P_target[1])**2)
         J += W_SLACK * ca.sumsqr(S_alt)
+        J += self.W_STALL * S_stall[0, self.N] # <-- NEW: Final slack penalty
 
         # --- Constraints ---
         opti.subject_to(X[:, 0] == P_init)
@@ -193,7 +201,7 @@ class MPCController:
         opti.subject_to(X[2, :] >= Z_MIN - S_alt) # Altitude constraint with slack
         opti.subject_to(S_alt >= 0.0)
         
-        # --- CRITICAL FIX: Final State V_MIN Constraint ---
+        # --- CRITICAL FIX: Final State V_MIN Constraint (Soft) ---
         vx_N, vy_N, vz_N = X[3, self.N], X[4, self.N], X[5, self.N]
         # For simplicity, assume zero wind for the terminal constraint (conservative)
         W_atm_z_N = ca.MX(0.0)
@@ -203,8 +211,9 @@ class MPCController:
         V_air_vec_N = V_ground_N - W_in_N
         V_air_sq_N = ca.sumsqr(V_air_vec_N)
 
-        # Enforce minimum air velocity squared on the final state
-        opti.subject_to(V_air_sq_N >= self.V_MIN**2)
+        # Enforce minimum air velocity squared on the final state (Soft Constraint)
+        opti.subject_to(V_air_sq_N >= self.V_MIN**2 - S_stall[0, self.N])
+        opti.subject_to(S_stall[0, self.N] >= 0.0)
         # --- END CRITICAL FIX ---
 
 
@@ -218,8 +227,6 @@ class MPCController:
         # NOTE: This constraint block still incorrectly uses the V_air_sq_ground variable, 
         # but changing it would require complex re-indexing. We leave it as a known 
         # approximation for now, as the step-wise constraint is the priority fix.
-        # This prevents NaN generation from division by small numbers near V_mag, 
-        # as V_mag is guaranteed to be >= V_MIN.
         V_air_sq_for_gamma = X[3, :]**2 + X[4, :]**2 + X[5, :]**2 # V_ground_sq
         
         # Upper bound: vz <= V_mag * sin(gamma_max)
@@ -232,13 +239,10 @@ class MPCController:
         # -----------------------------------------------
         
         # 1. State Guess (X_guess): Use a feasible NUMERICAL placeholder (DM)
-        # We use a numerical array corresponding to a legal, non-zero speed glide
         # [x, y, z, vx, vy, vz]
-        # CRITICAL FIX: Lowering speed guess to a safer thermalling value
         SAFE_X_GUESS_ARRAY = ca.DM([0.0, 0.0, 500.0, 7.0, 0.0, -1.0]) 
         X_safe_guess_DM = ca.repmat(SAFE_X_GUESS_ARRAY, 1, self.N + 1)
         
-        # set_initial must use a numerical DM for the guess value
         opti.set_initial(X, X_safe_guess_DM) 
         
         # 2. Control Guess (U_guess): Fixed Feasible Values (DM)
@@ -250,6 +254,7 @@ class MPCController:
         
         opti.set_initial(U, U_guess) 
         opti.set_initial(S_alt, 0.0) 
+        opti.set_initial(S_stall, 0.0) # <-- NEW: Initial guess for stall slack
         # -------------------------------------------
 
         opti.minimize(J)
