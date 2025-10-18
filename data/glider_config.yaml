@@ -1,25 +1,26 @@
-# Glider Control System Configuration
-
-SIMULATION:
-  MAX_TIME: 240.0
-  DT: 2.0
-
-MPC:
-  N: 10
-  DT: 2.0
-  # State cost weights: [x, y, z, vx, vy, vz]
-  Q_diag: [1000.0, 1000.0, 5000.0, 10.0, 10.0, 10.0] 
-  # Control cost weights: [phi (bank), alpha (pitch)]
-  R_diag: [0.1, 0.1]
-
+# --- GLIDER PARAMETERS ---
 GLIDER:
-  mass: 700.0
-  S: 14.0
-  CD0: 0.015
-  K: 0.04
-  CL: 0.8
+  # FINAL FIX: Glider mass set to 20.0kg for high efficiency and physically feasible thermal capture.
+  mass: 20.0        # Glider mass (kg) 
+  S: 14.0            # Wing surface area (m^2)
+  CL: 0.8            # Coefficient of Lift (average for flight envelope)
+  CD0: 0.015         # Parasitic Drag Coefficient
+  K: 0.04            # Induced Drag Factor
 
-CONSTRAINTS:
-  MIN_AIRSPEED: 10.0
-  MAX_BANK_DEG: 45.0
-  MAX_PITCH_DEG: 10.0
+# --- SIMULATION PARAMETERS ---
+SIMULATION:
+  max_time: 120.0    # Maximum simulation time (s)
+  time_step: 0.2     # Simulation time step (s)
+  initial_state: [0.0, 0.0, 400.0, 20.0, 0.0, 0.0]  # [x, y, z, vx, vy, vz]
+
+# --- ATMOSPHERIC MODEL PARAMETERS (Thermal centered at 500, 500) ---
+ATMOSPHERE:
+  thermal_center_x: 500.0
+  thermal_center_y: 500.0
+  thermal_radius: 150.0
+  max_vertical_speed: 3.0
+
+# --- MPC PARAMETERS ---
+MPC:
+  horizon_steps: 10  # N
+  timestep: 2.0      # DT (s)
