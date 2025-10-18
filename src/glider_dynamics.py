@@ -17,6 +17,7 @@ class GliderDynamics:
         
         # Load SIMULATION parameters
         sim_params = self.config.get('SIMULATION', {})
+        # Assuming initial state is X = [x, y, z, vx, vy, vz]
         self.state = np.array(sim_params.get('initial_state', [0.0, 0.0, 400.0, 20.0, 0.0, 0.0]))
         
         # Load GLIDER parameters
@@ -85,10 +86,6 @@ class GliderDynamics:
             # 2. Lift Force (Fl) - CRITICALLY CORRECTED
             L_mag = 0.5 * self.rho * self.S * CL * V_reg**2
             
-            # Lift is perpendicular to e_v. We define the vector 'perp_to_ev'
-            # that is perpendicular to e_v and in the 'vertical' plane
-            # defined by e_v and the Earth Z-axis [0, 0, 1].
-            
             # Project Z-axis onto the plane perpendicular to e_v
             e_z = np.array([0.0, 0.0, 1.0])
             e_L_raw = e_z - np.dot(e_z, e_v) * e_v 
@@ -128,4 +125,3 @@ class GliderDynamics:
         
         self.state = X_k
         return self.state
-
