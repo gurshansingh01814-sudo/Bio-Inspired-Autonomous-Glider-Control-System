@@ -7,22 +7,23 @@ import datetime
 import pandas as pd
 
 # CRITICAL: Ensure these imports point to the correct files.
-# Assuming 'src' and 'sim' are parallel directories, use relative imports.
-# Adjust these paths if your file structure is different.
 try:
     from src.mpc_controller import MPCController
     # Assuming GliderDynamics and Thermal classes are defined or imported from files
-    from src.glider_dynamics import GliderDynamics 
-    from src.atmospheric_model import AtmosphericModel as Thermal
+    from sim.glider_dynamics import GliderDynamics 
+    from sim.thermal_model import Thermal 
 except ImportError as e:
     print(f"FATAL: Missing a required class import: {e}")
+    # If the above fails, you might need to adjust your system's Python path or the import style
+    print("If imports fail, ensure you are running the script using: python -m sim.main_simulation")
     sys.exit(1)
 
 
 class GliderControlSystem:
     # --- Configuration Paths ---
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    CONFIG_PATH = os.path.join(BASE_DIR, 'config', 'glider_config.yaml')
+    # FIX: Corrected path from 'config' to 'data'
+    CONFIG_PATH = os.path.join(BASE_DIR, 'data', 'glider_config.yaml') 
 
     def __init__(self):
         print(f"Attempting to load config from: {self.CONFIG_PATH}")
@@ -47,13 +48,13 @@ class GliderControlSystem:
             with open(path, 'r') as f:
                 return yaml.safe_load(f)
         except Exception as e:
+            # FATAL: Configuration loading failure
             print(f"FATAL: Could not load configuration file {path}: {e}")
             sys.exit(1)
 
-    # --- MAIN LOOP (Now correctly placed inside the class) ---
+    # --- MAIN LOOP ---
     def main_loop(self):
         T_end = 400.0
-        # CRITICAL: Access self.mpc.DT only after self.mpc is initialized
         DT = self.mpc.DT 
         
         current_state = self.glider.get_state()
