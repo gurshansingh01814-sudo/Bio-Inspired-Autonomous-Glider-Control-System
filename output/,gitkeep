@@ -1,0 +1,3 @@
+cp Figure_1.png output/successful_altitude_and_lift.png
+cp Figure_2.png output/successful_3d_trajectory.png
+cp Figure_3.png output/successful_control_inputs.png
