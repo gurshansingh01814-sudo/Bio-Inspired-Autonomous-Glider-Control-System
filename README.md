@@ -6,7 +6,7 @@
              Prerequisites 
              All required Python libraries and their versions are listed in requirements.txt
              Setup Instructions
-                Clone the repository: git clone [YOUR-REPO-LINK]
+                Clone the repository: git clone [gh repo clone gurshansingh01814-sudo/Bio-Inspired-Autonomous-Glider-Control-System]
                                       cd bio-inspired-autonomous-glider-control
                 Install dependencies: Use the provided requirements file : pip install -r requirements.txt
 # Running the Simulation-
