@@ -1,13 +1,11 @@
 import numpy as np
-import time
 import os
 import pandas as pd
 import sys
 import yaml
 import math
-from datetime import datetime # Added for precise timestamping
+from datetime import datetime 
 
-# Assume the necessary classes are now correctly imported from src/
 try:
     from src.glider_dynamics import GliderDynamics 
     from src.mpc_controller import MPCController
@@ -21,7 +19,6 @@ class GliderControlSystem:
     
     def __init__(self, config_path='./data/glider_config.yaml'):
         
-        # Load config to retrieve simulation parameters first
         self.config_path = config_path
         try:
             with open(config_path, 'r') as f:
@@ -39,7 +36,6 @@ class GliderControlSystem:
         self.dt_mpc = mpc_params.get('control_rate_s', 2.0) 
         self.N_horizon = mpc_params.get('horizon_steps', 40)
         
-        # CRITICAL FIX: Use integer steps for reliable timing
         self.mpc_update_freq = int(self.dt_mpc / self.dt_sim)
         if self.mpc_update_freq < 1:
             raise ValueError("dt_mpc must be an integer multiple of dt_sim!")
@@ -50,7 +46,7 @@ class GliderControlSystem:
         self.mpc = MPCController(config_path)
         
         # Initialize storage and counters
-        self.flight_data = [] # List to hold dictionaries of data points
+        self.flight_data = [] 
         self.step_count = 0
         self.current_time = 0.0
         
@@ -59,7 +55,6 @@ class GliderControlSystem:
         
         print("System initialized successfully.")
     
-    # --- NEW METHOD: Records all relevant data for CSV logging ---
     def record_data(self, X_state, U_control, Wz_lift):
         """Calculates all logged variables and appends the data dictionary to self.flight_data."""
         x, y, z, vx, vy, vz = X_state
@@ -89,9 +84,8 @@ class GliderControlSystem:
             'dist_to_center': distance  
         }
         
-        self.flight_data.append(data_point) # *** THE FIX: ADDING DATA TO THE LIST ***
+        self.flight_data.append(data_point) 
 
-    # --- MODIFIED METHOD: Console print only ---
     def log_status(self, X_state, U_control, Wz_lift):
         """Prints a snapshot of the simulation state to the console (for viewing only)."""
         x, y, z, vx, vy, vz = X_state
@@ -102,7 +96,6 @@ class GliderControlSystem:
         thermal_center = self.thermal.get_thermal_center()
         distance = math.sqrt((x - thermal_center[0])**2 + (y - thermal_center[1])**2)
         
-        # Use the standard print function for console output (matching previous output format)
         print(f"T={self.current_time:.1f}s | Alt={z:.2f}m | Airspeed={airspeed:.2f}m/s | Wz={Wz_lift:.2f}m/s | Dist={distance:.1f}m | CL={CL:.2f} | Phi={math.degrees(phi):.1f}°")
 
     def main_loop(self):
@@ -134,8 +127,7 @@ class GliderControlSystem:
                 self.last_u_star = u_optimal
                 
                 # Log status every MPC step (every self.dt_mpc seconds)
-                # NOTE: We log_status for console print, but record_data happens after the step
-                # The console print here will use the state BEFORE the step and the command for the next step.
+                # NOTE: The console print here will use the state BEFORE the step and the command for the next step.
                 
             # --- Glider Dynamics Step (Executed every self.dt_sim seconds) ---
             CL_cmd, phi_cmd = self.last_u_star[0], self.last_u_star[1]

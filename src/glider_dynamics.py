@@ -8,8 +8,6 @@ class GliderDynamics:
     """
     Implements the NUMERICAL, continuous-time state-space model for the glider 
     used for simulation (integration) over the small time step (dt_sim).
-    
-    CRITICAL FIX: Uses RK4 integration instead of Euler for stability.
     """
 
     def __init__(self, config_path):
@@ -25,16 +23,15 @@ class GliderDynamics:
         self.g = env_params.get('gravity', 9.81)
         self.rho = env_params.get('rho_air', 1.225)
         
-        # Initial State: [x, y, z, vx, vy, vz] (e.g., stationary at 500m)
+        # Initial State: [x, y, z, vx, vy, vz]
         self.X = np.array(glider_params.get('initial_state', [0.0, 0.0, 500.0, 15.0, 0.0, -1.0]))
         
-        # Numerical stability constants (same as in MPC, but now used with NumPy)
+        # Numerical stability constants
         self.EPSILON_AIRSPEED = 1e-4 
         self.EPSILON_LIFT = 1e-3     
         
-        # --- FIX: Initializing new logging attributes (CL and phi) ---
-        self.CL = 0.2  # Stores the current actual Lift Coefficient (initialized to a legal minimum)
-        self.phi = 0.0 # Stores the current actual Bank Angle (initialized to straight flight)
+        self.CL = 0.2  
+        self.phi = 0.0 
         
     def _load_config(self, path):
         """Loads configuration from a YAML file for internal use."""
@@ -53,7 +50,6 @@ class GliderDynamics:
         Numerical, continuous-time state-space model (X_dot = f(X, U, W_atm)).
         Uses NumPy for calculations.
         """
-        # Ensure X is an array for safety, although it should be one
         X = np.asarray(X)
         vx, vy, vz = X[3], X[4], X[5]
         
@@ -66,7 +62,6 @@ class GliderDynamics:
         
         # 1. Airspeed Regularization (V_reg)
         V_reg = np.sqrt(V_air_mag**2 + self.EPSILON_AIRSPEED**2) 
-        # Unit vector in direction of air velocity
         e_v = V_air_vec / V_reg 
         
         # 1. Drag Force (Fd)
@@ -108,25 +103,22 @@ class GliderDynamics:
     def update(self, CL_cmd, phi_cmd, dt_sim, atmospheric_model):
         """
         Integrates the glider dynamics forward one time step (dt_sim) using 
-        Fourth-Order Runge-Kutta (RK4) integration for stability.
+        Fourth-Order Runge-Kutta (RK4) integration.
         """
-        # --- FIX: Store the commanded values for the logger ---
         self.CL = CL_cmd
         self.phi = phi_cmd
-        # -----------------------------------------------------
 
         # Get atmospheric lift at the current glider position
         x, y, z = self.X[0], self.X[1], self.X[2]
         W_atm_z = atmospheric_model.get_thermal_lift(x, y, z)
         
-        # --- RK4 Integration Steps ---
+        # RK4 Integration Steps
         
         # K1: Start slope
         K1 = self._state_dot(self.X, CL_cmd, phi_cmd, W_atm_z)
         
         # K2: Midpoint slope 1
         X2 = self.X + (dt_sim / 2.0) * K1
-        # W_atm_z is assumed constant over the RK4 steps for simplicity/speed
         K2 = self._state_dot(X2, CL_cmd, phi_cmd, W_atm_z)
         
         # K3: Midpoint slope 2
@@ -145,4 +137,3 @@ class GliderDynamics:
 
     def get_state(self):
         """Returns the current state of the glider: [x, y, z, vx, vy, vz]."""
-        return self.X

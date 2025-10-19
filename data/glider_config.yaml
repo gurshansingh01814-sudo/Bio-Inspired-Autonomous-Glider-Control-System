@@ -33,16 +33,10 @@ ATMOSPHERE:
     center_x: 500.0      # Thermal center X coordinate (m)
     center_y: 500.0      # Thermal center Y coordinate (m)
     radius: 150.0        # Thermal radius (m)
-    # --- CRITICAL FIX: Ensure strong lift (Wz = 3.0 m/s) is available for climbing ---
     max_vertical_speed: 3.0 # Maximum vertical air speed (m/s)
 
 # --- MPC CONTROLLER PARAMETERS (Defines the control loop speed and planning depth) ---
 MPC:
-  # CRITICAL IMPROVEMENT: Increased horizon for better thermal planning
-  horizon_steps: 40      # N - Number of steps in the prediction horizon (CRUCIAL CHANGE)
-  
-  # IMPORTANT: This must be an integer multiple of SIMULATION:time_step_s
+  horizon_steps: 40     # Prediction horizon (number of steps)
   control_rate_s: 2.0    # DT - Time between control updates (s)
-  
-  # The number of simulation steps per control iteration (must be an integer)
-  steps_per_control_iter: 10
+  steps_per_control_iter: 10 # The number of simulation steps per control iteration

@@ -1,6 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D # REQUIRED for 3D plotting
+from mpl_toolkits.mplot3d import Axes3D 
 import sys
 import os
 import glob
@@ -23,15 +23,11 @@ def plot_flight_data(filepath):
         print(f"Error: File not found at {filepath}")
         return
     
-    # Check if necessary columns exist (assuming data logging is correct now)
     if 'CL_cmd' not in df.columns or 'phi_cmd' not in df.columns:
         print("Warning: Missing control command columns (CL_cmd, phi_cmd). Skipping control plots.")
-        # Fill with zeros or a constant if missing for robustness
         df['CL_cmd'] = df.get('CL_cmd', np.nan)
         df['phi_cmd'] = df.get('phi_cmd', np.nan)
     
-    # Calculate horizontal distance for convenience (assumes thermal center is at 500, 500 for visualization)
-    # The actual thermal center should be retrieved from the config/logged data if possible.
     THERMAL_X, THERMAL_Y = 500.0, 500.0 
     
     # -----------------------------------------------------------------
@@ -63,7 +59,7 @@ def plot_flight_data(filepath):
     plt.show()
 
     # -----------------------------------------------------------------
-    # --- Plot 2: 3D Trajectory (New Critical Plot) ---
+    # --- Plot 2: 3D Trajectory ---
     # -----------------------------------------------------------------
     fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(111, projection='3d')
@@ -71,11 +67,11 @@ def plot_flight_data(filepath):
     # Plot glider path
     ax.plot(df['x'], df['y'], df['z'], label='Glider Path', color='tab:red', linewidth=1.5)
     
-    # Scatter plot of thermal center (assuming constant height for visualization)
+    # Scatter plot of thermal center 
     ax.scatter([THERMAL_X], [THERMAL_Y], [df['z'].min()], color='k', marker='^', s=100, label='Thermal Center (Ground)')
     
     # Plot a cylinder/circle representing the thermal radius
-    thermal_radius = 150.0 # Should ideally be loaded from config
+    thermal_radius = 150.0 
     t = np.linspace(0, 2*np.pi, 100)
     ax.plot(THERMAL_X + thermal_radius*np.cos(t), 
             THERMAL_Y + thermal_radius*np.sin(t), 
@@ -86,12 +82,12 @@ def plot_flight_data(filepath):
     ax.set_zlabel('Z Altitude (m)')
     ax.set_title('3D Flight Trajectory and Thermal Interaction')
     ax.legend()
-    ax.view_init(elev=25., azim=-150) # Set a good viewing angle
+    ax.view_init(elev=25., azim=-150) 
     plt.tight_layout()
     plt.show()
 
     # -----------------------------------------------------------------
-    # --- Plot 3: Control Inputs (New Critical Plot for MPC analysis) ---
+    # --- Plot 3: Control Inputs  ---
     # -----------------------------------------------------------------
     fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
     
@@ -104,7 +100,7 @@ def plot_flight_data(filepath):
     axes[0].grid(True, linestyle='--', alpha=0.6)
     
     # Bottom Plot: Bank Angle (Phi)
-    # Convert radians to degrees for easier interpretation
+   
     axes[1].plot(df['time'], np.degrees(df['phi_cmd']), label='Bank Angle ($\phi$)', color='tab:brown')
     axes[1].set_ylabel('Bank Angle ($\phi$) (deg)', fontsize=12)
     axes[1].set_xlabel('Time (s)', fontsize=12)
@@ -120,7 +116,6 @@ if __name__ == '__main__':
     try:
         # Determine the results directory path
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Assuming script is in 'scripts/' and results in 'results/'
         results_dir = os.path.join(current_dir, '..', 'results') 
         
         latest_file = find_latest_csv(results_dir)
