@@ -2,13 +2,9 @@ import pandas as pd
 import numpy as np
 
 class DataLogger:
-    """
-    Utility class for logging state, control, and thermal data during the simulation.
-    """
+    
     def __init__(self):
-        # Initialize an empty list to store dictionary entries for each time step
         self.data_entries = []
-        # CRITICAL FIX: Columns aligned with 6D state and [CL, Phi] control
         self.columns = [
             'time', 'x', 'y', 'z', 'vx', 'vy', 'vz', 
             'CL_cmd', 'phi_cmd', 'Wz', 'dist_to_center'
@@ -17,7 +13,6 @@ class DataLogger:
     def log_step(self, t, state, control, thermal_wz, dist_to_thermal):
         """
         Logs the state and control at a specific time step.
-        Control input 'control' is [CL_command, phi_command (rad)]
         """
         state = np.array(state).flatten()
         control = np.array(control).flatten()
@@ -34,13 +29,10 @@ class DataLogger:
             'vy': state[4],
             'vz': state[5],
             
-            # Log CL directly (dimensionless coefficient)
             'CL_cmd': control[0], 
             
-            # Log Phi in radians to match the simulator
             'phi_cmd': control[1], 
             
-            # Consistent naming with main_simulation and plotter
             'Wz': thermal_wz, 
             'dist_to_center': dist_to_thermal
         }
@@ -58,7 +50,7 @@ class DataLogger:
         df = pd.DataFrame(self.data_entries)
         
         print("\n" + "="*80)
-        print("                   BIO-INSPIRED GLIDER FLIGHT SUMMARY")
+        print("                         BIO-INSPIRED GLIDER FLIGHT SUMMARY")
         print("="*80)
         
         final_z = df['z'].iloc[-1]
@@ -71,8 +63,8 @@ class DataLogger:
         
         df_summary = df.copy()
         if 'phi_cmd' in df_summary.columns:
-             df_summary['phi_cmd (deg)'] = np.degrees(df_summary['phi_cmd'])
-             df_summary = df_summary.drop(columns=['phi_cmd'])
+            df_summary['phi_cmd (deg)'] = np.degrees(df_summary['phi_cmd'])
+            df_summary = df_summary.drop(columns=['phi_cmd'])
         
         print("Sampled Trajectory Data (Last 5 Steps):")
         print(df_summary.tail().to_markdown(index=False, floatfmt=".2f"))
