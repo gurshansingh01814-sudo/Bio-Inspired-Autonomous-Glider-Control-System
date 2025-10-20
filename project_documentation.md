@@ -20,6 +20,7 @@ The control input vector is $\mathbf{U} = [C_L, \phi]^T$.
     
  The environment includes a stationary, axially symmetric thermal characterized by its center $(\mathbf{x_c}, \mathbf{y_c})$, radius $\mathbf{R}$, and maximum vertical wind speed $\mathbf{W_{z,max}}$. The vertical wind speed ($\mathbf{W_z}$) at any horizontal distance $\mathbf{r}$ from the center is modeled using a simplified conical profile:
                 $$\mathbf{W_z}(r) = \mathbf{W_{z,max}} \cdot \max\left(0, 1 - \frac{r}{R}\right)$$
+
 III. Model Predictive Control (MPC) Formulation-
 
  A. Objective Function-
