@@ -32,7 +32,7 @@ Configure the Run-
 
 ## License
 
-This project is licensed under the **MIT License** - see the dedicated [LICENSE](LICENSE) file for details.
+This project is licensed under the **Apache License 2.0** - see the dedicated [LICENSE](LICENSE) file for details.
 
 Copyright (c) 2025 Gurshan Singh.
                      
