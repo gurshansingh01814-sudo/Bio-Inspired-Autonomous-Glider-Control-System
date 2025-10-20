@@ -42,16 +42,13 @@ IV. Demonstrated Performance (Proof of Concept)-
          
 
 
-
-
-
-MetricStart ValueEnd Value (120s)ConclusionAltitude ($\mathbf{z}$)$\mathbf{490\text{m}}$$\mathbf{732\text{m}}$Net altitude gain of over 240m achieved.StrategyClose proximity to thermal center ($\mathbf{10\text{m}}$)Controlled spiral climb out to $\mathbf{110\text{m}}$ radiusMPC successfully planned and executed the spiraling strategy.Control Inputs$\mathbf{C_L} = 0.20$, $\mathbf{\phi} = 0^\circ$Sustained $\mathbf{C_L} > 1.0$ and controlled bank $\mathbf{\phi} \approx 20^\circ$Validation of energy-maximizing control commands.
+| Metric | Start Value | End Value (120s) | Conclusion |
+| :---: | :---: | :---: | :--- |
+| **Altitude ($z$)** | $\mathbf{490\text{m}}$ | $\mathbf{732\text{m}}$ | Net altitude gain of over 240m achieved. |
+| **Strategy** | Close proximity to thermal center ($\mathbf{10\text{m}}$) | Controlled spiral climb out to $\mathbf{110\text{m}}$ radius | MPC successfully planned and executed the spiraling strategy. |
+| **Control Inputs** | $\mathbf{C_L} = 0.20$, $\mathbf{\phi} = 0^\circ$ | Sustained $\mathbf{C_L > 1.0}$ and controlled bank $\mathbf{\phi} \approx 20^\circ$ | Validation of energy-maximizing control commands. |
           
 
- 
- 
- 
- 
  
  This performance validates the use of non-linear MPC for real-time energy-state management in bio-inspired flight control.
          
