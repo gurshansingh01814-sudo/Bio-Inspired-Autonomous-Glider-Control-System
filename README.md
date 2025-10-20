@@ -1,6 +1,6 @@
 # Bio-Inspired-Autonomous-Glider-Control-System 
 # Project Overview-
-             This project implements a fully non-linear Model Predictive Control (MPC) system to enable an autonomous glider to locate, capture, and climb within thermal updrafts—a critical               bio-inspired strategy used by real-world soaring birds. The system successfully demonstrates closed-loop control over a 6-Degrees-of-Freedom (DOF) glider model, optimizing lift               coefficient ($\mathbf{C_L}$) and bank angle ($\mathbf{\phi}$) to maximize altitude gain.
+         This project implements a fully non-linear Model Predictive Control (MPC) system to enable an autonomous glider to locate, capture, and climb within thermal updrafts—a critical            bio-inspired strategy used by real-world soaring birds. The system successfully demonstrates closed-loop control over a 6-Degrees-of-Freedom (DOF) glider model, optimizing lift               coefficient ($\mathbf{C_L}$) and bank angle ($\mathbf{\phi}$) to maximize altitude gain.
 # Installation and Setup- 
              This project requires Python and specialized libraries for dynamics, control, and optimization
              Prerequisites 
