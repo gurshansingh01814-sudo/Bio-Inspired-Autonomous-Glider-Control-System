@@ -26,7 +26,8 @@ III. Model Predictive Control (MPC) Formulation-
  A. Objective Function-
      
 The objective is formulated as a constrained non-linear optimization problem (NLP) solved using the CasADi framework and the Ipopt solver. The cost function $J$ is designed to maximize the final altitude $\mathbf{z_N}$ while minimizing control effort and encouraging proximity to the thermal center.
-             $$\min_{\mathbf{U}_k} J = -w_z z_N + w_{dist} \sum_{k=0}^{N-1} r_k + w_{\Delta u} \sum_{k=0}^{N-1} (\Delta C_L^2 + \Delta \phi^2)$$
+
+ $$\min_{\mathbf{U}_k} J = -w_z z_N + w_{dist} \sum_{k=0}^{N-1} r_k + w_{\Delta u} \sum_{k=0}^{N-1} (\Delta C_L^2 + \Delta \phi^2)$$
 
  B. ConstraintsGlider Dynamics:
 
