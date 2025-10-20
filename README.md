@@ -28,5 +28,11 @@ Configure the Run-
                      src/glider_dynamics.py                           src/glider_dynamics.py
                      src/mpc_controller.py                            Defines the MPC optimization problem (CasADi), objective, and constraints.
                      src/atmospheric_model.py                         Calculates the thermal lift ($\mathbf{W_z}$) based on location.
-                     data_logger.py                                   Modular class for efficient and structured recording of all simulation and control data
+                     data_logger.py                                   Modular class for efficient and structured recording of all simulation and control data 
+
+## License
+
+This project is licensed under the **MIT License** - see the dedicated [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2025 Gurshan Singh.
                      
